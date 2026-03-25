@@ -12,13 +12,10 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true,
-      "jsEngine": "hermes"
+      "supportsTablet": true
     },
     "android": {
       "package": "com.anonymous.localAIChat",
-      "jsEngine": "hermes",
-      "newArchEnabled": true,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

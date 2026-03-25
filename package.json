@@ -9,7 +9,7 @@
     "web": "expo start --web",
     "eas-build-pre-install": "npm config set legacy-peer-deps true"
   },
-"dependencies": {
+  "dependencies": {
     "expo": "~55.0.8",
     "expo-status-bar": "~55.0.4",
     "react": "19.0.0",
@@ -17,7 +17,7 @@
     "react-native-mmkv": "^3.2.0"
   },
   "private": true,
-"devDependencies": {
+  "devDependencies": {
     "@babel/core": "^7.25.2",
     "babel-preset-expo": "^55.0.12"
   }
