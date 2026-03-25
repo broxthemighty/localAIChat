@@ -8,15 +8,16 @@
     "ios": "expo run:ios",
     "web": "expo start --web"
   },
-  "dependencies": {
+"dependencies": {
     "expo": "~55.0.8",
     "expo-status-bar": "~55.0.4",
     "react": "19.0.0",
-    "react-native": "0.77.10",
-    "react-native-mmkv": "^4.3.0"
+    "react-native": "0.76.7",
+    "react-native-mmkv": "^3.2.0"
   },
   "private": true,
-  "devDependencies": {
+"devDependencies": {
+    "@babel/core": "^7.25.2",
     "babel-preset-expo": "^55.0.12"
   }
 }
