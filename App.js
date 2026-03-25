@@ -15,7 +15,7 @@ import {
   Alert,
   TouchableWithoutFeedback,
 } from 'react-native';
-//import { MMKV } from 'react-native-mmkv';
+import { MMKV } from 'react-native-mmkv';
 
 /*
  * UAT MS688 Mobile Development
@@ -37,9 +37,7 @@ import {
 // 4. context windowing: feed retrieved vector results back into the ai prompt for "long-term memory" capabilities.
 
 // MMKV storage instance
-//const storage = new MMKV();
-
-const storage = { getString: () => null, set: () => {}, delete: () => {} };
+const storage = new MMKV();
 
 // storage key variables
 const CHAT_STORAGE_KEY = '@chat_history';
