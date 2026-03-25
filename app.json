@@ -27,9 +27,6 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "react-native-video"
-    ],
     "extra": {
       "eas": {
         "projectId": "56ec5bae-6c2a-4646-a3ae-105f2873aea7"
