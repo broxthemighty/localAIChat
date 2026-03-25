@@ -20,13 +20,14 @@ import {
 /*
  * UAT MS688 Mobile Development
  *
- * Week 2
- * Assignment 2.1
+ * Week 3
+ * Assignment 3.1
  * * Local AI core
  *
  * By Matt Lindborg
  * * Week 1 - created the core logic and main app display
- * Week 2 - added local storage capability and ux improvements
+ * * Week 2 - added local storage capability and ux improvements, duck duck go api
+ * * Week 3 - added updated storage using mmkv
  */
 
 // roadmap for future vector database integration:
