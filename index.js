@@ -1,4 +1,3 @@
-import 'react-native-gesture-handler'; // Required for some internal Expo navigators
 import { registerRootComponent } from 'expo';
 import { Platform } from 'react-native';
 
