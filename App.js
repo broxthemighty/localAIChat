@@ -502,7 +502,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f0f0', 
     borderRadius: 20, 
     paddingHorizontal: 15, 
-    paddingVeritical: 10,
+    paddingVertical: 10,
     fontSize: 16, 
     color: '#333',
   },
