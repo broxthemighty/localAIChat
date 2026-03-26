@@ -15,7 +15,7 @@ import {
   Alert,
   TouchableWithoutFeedback,
 } from 'react-native';
-import { MMKV } from 'react-native-mmkv';
+import { createMMKV } from 'react-native-mmkv';
 
 /*
  * UAT MS688 Mobile Development
@@ -37,7 +37,7 @@ import { MMKV } from 'react-native-mmkv';
 // 4. context windowing: feed retrieved vector results back into the ai prompt for "long-term memory" capabilities.
 
 // MMKV storage instance
-const storage = new MMKV();
+const storage = createMMKV();
 
 // storage key variables
 const CHAT_STORAGE_KEY = '@chat_history';
@@ -154,8 +154,8 @@ export default function App() {
   // handle profile reset variable
   const resetProfile = () => {
     try {
-      storage.delete(THEME_STORAGE_KEY);
-      storage.delete(USER_NAME_KEY);
+      storage.remove(THEME_STORAGE_KEY);
+      storage.remove(USER_NAME_KEY);
       setIsDarkMode(false);
       setUserName('Guest');
       setIsSettingsVisible(false);
@@ -167,7 +167,7 @@ export default function App() {
   // clear chat variable
   const clearChat = () => {
     try {
-      storage.delete(CHAT_STORAGE_KEY);
+      storage.remove(CHAT_STORAGE_KEY);
       const resetMessage = [{
         id: Date.now().toString(),
         text: "Chat history cleared. How can I help you?",
