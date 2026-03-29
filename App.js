@@ -27,10 +27,15 @@ import { createMMKV } from 'react-native-mmkv';
  * By Matt Lindborg
  * * Week 1 - created the core logic and main app display
  * * Week 2 - added local storage capability and ux improvements, duck duck go api
- * * Week 3 - added updated storage using mmkv
+ * * Week 3 - converted from expo go to local expo app, added updated storage using mmkv,
+ *            designed and streamlined build pipeline, connecting expo to git repo,
+ *            so every push to the master branch will cause a build and deploy.
  */
 
 // roadmap for future vector database integration:
+// a. add slm support, so the ai chat actually uses an ai.
+// b. add model searching similar to lm studio, using hugging face api.
+// -----
 // 1. implement text embedding: convert user input into high-dimensional vectors (e.g., via onnx runtime).
 // 2. setup local vector store: integrate a mobile-compatible vector library (like sqlite-vss) to replace json-based history. (need a schema that works)
 // 3. semantic search: enable the ai to "remember" context by searching the database for visually/thematically similar past messages.
