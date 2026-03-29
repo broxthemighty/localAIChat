@@ -16,6 +16,7 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import { createMMKV } from 'react-native-mmkv';
+import { initLlama } from 'react-native-llama';
 
 /*
  * UAT MS688 Mobile Development
@@ -43,6 +44,10 @@ const storage = createMMKV();
 const CHAT_STORAGE_KEY = '@chat_history';
 const THEME_STORAGE_KEY = '@theme_setting';
 const USER_NAME_KEY = '@user_name';
+
+// ai model variables
+const [llamaContext, setLlamaContext] = useState(null);
+const [isModelLoaded, setIsModelLoaded] = useState(false);
 
 // main app
 export default function App() {
@@ -77,6 +82,29 @@ export default function App() {
       hideSub.remove();
     };
   }, []);
+
+  useEffect(() => {
+  const setupLocalAI = async () => {
+    try {
+      // assuming model downloaded to path
+      const modelPath = 'file://path_to_your_downloaded_model.gguf'; 
+      
+      const context = await initLlama({
+        model: modelPath,
+        use_mlock: true, // forces model into RAM to prevent swapping
+        n_ctx: 1024,     // context window size (keep it small for mobile)
+        n_gpu_layers: 0, // set > 0 if able to configure Metal/GPU acceleration later
+      });
+      
+      setLlamaContext(context);
+      setIsModelLoaded(true);
+    } catch (error) {
+      console.error("Failed to initialize SLM:", error);
+    }
+  };
+
+  setupLocalAI();
+}, []);
 
   // load all stored data variable
   const loadInitialData = () => {
@@ -265,19 +293,46 @@ export default function App() {
       // explicit scroll call
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } else {
-      setTimeout(() => {
-        const aiMsg = {
-          id: (Date.now() + 1).toString(),
-          text: `This is a saved simulated response, ${userName}! History will persist.`,
-          sender: 'ai',
-        };
-        const updatedWithMock = [...updatedWithUser, aiMsg];
-        setMessages(updatedWithMock);
-        saveChatHistory(updatedWithMock);
+      if (!llamaContext) {
+        Alert.alert("Error", "AI model is not loaded yet.");
+        setIsTyping(false);
+        return;
+      }
+
+      // 1. Setup the prompt format (adjust based on the specific model you download)
+      const prompt = `<|user|>\n${currentInput}\n<|assistant|>\n`;
+
+      // 2. Create a placeholder message for the UI
+      const aiMsgId = (Date.now() + 1).toString();
+      const placeholderMsg = { id: aiMsgId, text: "...", sender: 'ai' };
+      
+      const updatedWithMock = [...updatedWithUser, placeholderMsg];
+      setMessages(updatedWithMock);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+
+      try {
+        // 3. Generate the completion
+        const response = await llamaContext.completion({
+          prompt: prompt,
+          n_predict: 150, // max tokens to generate
+          temperature: 0.7,
+        });
+
+        // 4. Update the UI with the real response
+        const finalMsg = { id: aiMsgId, text: response.text, sender: 'ai' };
+        const finalMessages = [...updatedWithUser, finalMsg];
+        
+        setMessages(finalMessages);
+        saveChatHistory(finalMessages);
+        
+      } catch (error) {
+        console.error("Inference failed:", error);
+        setMessages([...updatedWithUser, { id: aiMsgId, text: "Sorry, my neural net glitched.", sender: 'ai' }]);
+      } finally {
         setIsTyping(false);
         // explicit scroll call
         setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-      }, 1500);
+      }
     }
   };
 
