@@ -31,6 +31,9 @@
       "eas": {
         "projectId": "56ec5bae-6c2a-4646-a3ae-105f2873aea7"
       }
-    }
+    },
+    "plugins": [
+      "expo-video"
+    ]
   }
 }

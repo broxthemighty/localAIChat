@@ -16,7 +16,8 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import { createMMKV } from 'react-native-mmkv';
-import { Video, ResizeMode } from 'expo-av';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useEventListener } from 'expo'; // used to listen for the video ending
 
 /*
  * UAT MS688 Mobile Development
@@ -66,9 +67,22 @@ export default function App() {
     storage.getBoolean('showSplashVideo') ?? true
   );
   // if playIntroVideo is false, isVideoFinished starts as true, 
-  // skipping the splash screen instantly.
+  // skipping the splash screen.
   const [isVideoFinished, setIsVideoFinished] = useState(!playIntroVideo);
-  const videoRef = useRef(null);
+
+  // initialize the expo-video player
+  const player = useVideoPlayer(require('./assets/Synthlizard_Studios_Logo_Animated.mp4'), (player) => {
+    player.loop = false;
+    if (playIntroVideo) {
+      player.play(); // auto-play if settings allow it
+    }
+  });
+
+  // listen for the exact moment the video finishes
+  useEventListener(player, 'playToEnd', () => {
+    setIsVideoFinished(true);
+  });
+
   // list reference variable
   const flatListRef = useRef(null);
 
@@ -224,19 +238,11 @@ export default function App() {
     return (
       <View style={styles.videoContainer}>
         <StatusBar hidden />
-        <Video
-          ref={videoRef}
+        <VideoView
           style={styles.videoPlayer}
-          source={require('./assets/Synthlizard_Studios_Logo_Animated.mp4')}
-          useNativeControls={false} // hide playback controls
-          resizeMode={ResizeMode.CONTAIN}
-          shouldPlay={true} // auto-play on load
-          onPlaybackStatusUpdate={(status) => {
-            // once the video reaches the end, update state to render the main app
-            if (status.didJustFinish) {
-              setIsVideoFinished(true);
-            }
-          }}
+          player={player}
+          nativeControls={false} // hide the playback controls
+          contentFit="contain"   // centers video with black background
         />
       </View>
     );
