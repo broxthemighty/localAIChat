@@ -16,6 +16,7 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import { createMMKV } from 'react-native-mmkv';
+import { Video, ResizeMode } from 'expo-av';
 
 /*
  * UAT MS688 Mobile Development
@@ -59,7 +60,15 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  
+
+  // read from storage on startup. default to 'true' if the key doesn't exist yet.
+  const [playIntroVideo, setPlayIntroVideo] = useState(
+    storage.getBoolean('showSplashVideo') ?? true
+  );
+  // if playIntroVideo is false, isVideoFinished starts as true, 
+  // skipping the splash screen instantly.
+  const [isVideoFinished, setIsVideoFinished] = useState(!playIntroVideo);
+  const videoRef = useRef(null);
   // list reference variable
   const flatListRef = useRef(null);
 
@@ -204,6 +213,35 @@ export default function App() {
     }
   };
 
+  // function to handle the toggle in settings window
+  const handleToggleVideo = (value) => {
+    setPlayIntroVideo(value);
+    storage.set('showSplashVideo', value); // save preference
+  };
+
+  // splash screen logo
+  if (!isVideoFinished) {
+    return (
+      <View style={styles.videoContainer}>
+        <StatusBar hidden />
+        <Video
+          ref={videoRef}
+          style={styles.videoPlayer}
+          source={require('./assets/Synthlizard_Studios_Logo_Animated.mp4')}
+          useNativeControls={false} // hide playback controls
+          resizeMode={ResizeMode.CONTAIN}
+          shouldPlay={true} // auto-play on load
+          onPlaybackStatusUpdate={(status) => {
+            // once the video reaches the end, update state to render the main app
+            if (status.didJustFinish) {
+              setIsVideoFinished(true);
+            }
+          }}
+        />
+      </View>
+    );
+  }
+
   // handle message send variable
   const handleSend = async () => {
     if (inputText.trim() === '') return;
@@ -309,6 +347,18 @@ export default function App() {
                 value={isDarkMode} 
                 onValueChange={toggleTheme}
                 trackColor={{ false: "#767577", true: "#34C759" }}
+              />
+            </View>
+
+            <View style={styles.settingRow}>
+              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>
+                Show Animated Logo on Startup
+              </Text>
+              <Switch
+                value={playIntroVideo}
+                onValueChange={handleToggleVideo}
+                trackColor={{ false: "#767577", true: "#81b0ff" }}
+                thumbColor={playIntroVideo ? "#2196F3" : "#f4f3f4"}
               />
             </View>
 
@@ -583,5 +633,15 @@ const styles = StyleSheet.create({
     color: '#007AFF', 
     fontWeight: 'bold', 
     fontSize: 17,
+  },
+  videoContainer: {
+    flex: 1,
+    backgroundColor: '#000', // black background prevents white flashes during load
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoPlayer: {
+    width: '100%',
+    height: '100%',
   },
 });
