@@ -20,12 +20,15 @@ import {
 } from "react-native";
 
 // enable LayoutAnimation for Android
-if (
+/*if (
   Platform.OS === "android" &&
   UIManager.setLayoutAnimationEnabledExperimental
 ) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+}*/
+
+import * as FileSystem from "expo-file-system/legacy";
+import { initLlama } from "llama.rn";
 
 import { createMMKV } from "react-native-mmkv";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -64,57 +67,53 @@ const storage = createMMKV();
 const CHAT_STORAGE_KEY = "@chat_history";
 const THEME_STORAGE_KEY = "@theme_setting";
 const USER_NAME_KEY = "@user_name";
+const SYSTEM_PROMPT_KEY = "@system_prompt";
 
 // three animated dots for ai processing
 const TypingIndicator = ({ isDarkMode }) => {
-  const dot1 = useRef(new Animated.Value(0)).current;
-  const dot2 = useRef(new Animated.Value(0)).current;
-  const dot3 = useRef(new Animated.Value(0)).current;
+  // master clock for all three dots
+  const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const animateDot = (dot, delay) => {
-      return Animated.sequence([
-        Animated.delay(delay),
-        Animated.loop(
-          Animated.sequence([
-            Animated.timing(dot, {
-              toValue: 1,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-            Animated.timing(dot, {
-              toValue: 0,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-          ]),
-        ),
-      ]);
+    anim.setValue(0);
+
+    // master loop runs from 0 to 1 over 1.2 seconds
+    const loop = Animated.loop(
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 1200,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+
+    // stop the animation thread completely when the component unmounts
+    return () => loop.stop();
+  }, [anim]);
+
+  // interpolate the single clock value into staggered movements
+  const getDotStyle = (index) => {
+    const start = index * 0.2;
+    const peak = start + 0.2;
+    const end = start + 0.4;
+
+    return {
+      opacity: anim.interpolate({
+        inputRange: [0, start, peak, end, 1],
+        outputRange: [0.3, 0.3, 1, 0.3, 0.3],
+        extrapolate: "clamp", // prevents values from exceeding limits
+      }),
+      transform: [
+        {
+          translateY: anim.interpolate({
+            inputRange: [0, start, peak, end, 1],
+            outputRange: [0, 0, -6, 0, 0],
+            extrapolate: "clamp",
+          }),
+        },
+      ],
     };
-
-    // run all three dot animations in parallel, staggered by the delay
-    Animated.parallel([
-      animateDot(dot1, 0),
-      animateDot(dot2, 150),
-      animateDot(dot3, 300),
-    ]).start();
-  }, [dot1, dot2, dot3]);
-
-  // interpolate the 0-1 values into vertical movement and opacity
-  const dotStyle = (dot) => ({
-    opacity: dot.interpolate({
-      inputRange: [0, 1],
-      outputRange: [0.3, 1],
-    }),
-    transform: [
-      {
-        translateY: dot.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, -6],
-        }),
-      },
-    ],
-  });
+  };
 
   return (
     <View style={styles.typingContainer}>
@@ -122,21 +121,21 @@ const TypingIndicator = ({ isDarkMode }) => {
         style={[
           styles.dot,
           isDarkMode ? styles.darkDot : styles.lightDot,
-          dotStyle(dot1),
+          getDotStyle(0),
         ]}
       />
       <Animated.View
         style={[
           styles.dot,
           isDarkMode ? styles.darkDot : styles.lightDot,
-          dotStyle(dot2),
+          getDotStyle(1),
         ]}
       />
       <Animated.View
         style={[
           styles.dot,
           isDarkMode ? styles.darkDot : styles.lightDot,
-          dotStyle(dot3),
+          getDotStyle(2),
         ]}
       />
     </View>
@@ -173,6 +172,13 @@ const TypeWriterText = ({ text, style, onTypingComplete, scrollViewRef }) => {
   return <Text style={style}>{displayedText}</Text>;
 };
 
+// slm prompt
+/*const SYSTEM_PROMPT = {
+  role: "system",
+  content:
+    "You are a helpful, witty, and highly conversational AI companion. Your goal is to build a friendly relationship with the user. You occasionally use mild sarcasm, but you are ultimately supportive and kind. Keep your responses concise and natural, as if texting a friend.",
+};*/
+
 // main app
 export default function App() {
   // state variables
@@ -183,6 +189,24 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [llamaContext, setLlamaContext] = useState(null);
+  const [animatingMessageId, setAnimatingMessageId] = useState(null);
+
+  // slm variables
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [modelReady, setModelReady] = useState(false);
+  const [systemPrompt, setSystemPrompt] = useState(
+    "You are a helpful, witty, and highly conversational AI companion. Your goal is to build a friendly relationship with the user. You occasionally use mild sarcasm, but you are ultimately supportive and kind. Keep your responses concise and natural, as if texting a friend.",
+  );
+  const [isPromptModalVisible, setIsPromptModalVisible] = useState(false);
+
+  // the direct link to a mobile-friendly conversational model (currently Llama-3.2-1B-Instruct)
+  const MODEL_URL =
+    "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf";
+  const MODEL_FILENAME = "companion_ai_model.gguf";
+  const MODEL_PATH = `${FileSystem.documentDirectory}${MODEL_FILENAME}`;
+  const MODEL_DISPLAY_NAME = "Llama 3.2 1B Instruct (Q4)";
 
   // read from storage on startup. default to 'true' if the key doesn't exist yet.
   const [playIntroVideo, setPlayIntroVideo] = useState(
@@ -211,9 +235,16 @@ export default function App() {
   // list reference variable
   const flatListRef = useRef(null);
 
-  // load chat history and listeners on startup
+  // load chat history, slm, and listeners on startup
   useEffect(() => {
     loadInitialData();
+    const checkModel = async () => {
+      const info = await FileSystem.getInfoAsync(MODEL_PATH);
+      if (info.exists) {
+        setModelReady(true);
+      }
+    };
+    checkModel();
 
     // keyboard listeners for dynamic height tracking
     const showSub = Keyboard.addListener(
@@ -231,21 +262,57 @@ export default function App() {
     };
   }, []);
 
+  // slm initilizaion
+  useEffect(() => {
+    let context = null;
+    const setupLlama = async () => {
+      // only initialize if the model is downloaded and we don't already have a context
+      if (modelReady && !llamaContext) {
+        try {
+          console.log("Loading model into memory...");
+          context = await initLlama({
+            model: MODEL_PATH,
+            use_mlock: true, // prevents the OS from paging the model out of RAM
+            n_ctx: 2048, // context window size
+            n_gpu_layers: 1, // uses device GPU for faster processing
+          });
+          setLlamaContext(context);
+          console.log("Llama context initialized and ready!");
+        } catch (error) {
+          console.error("Failed to init Llama:", error);
+          Alert.alert("Engine Error", "Failed to load the AI engine.");
+        }
+      }
+    };
+    setupLlama();
+
+    return () => {
+      if (context) {
+        context.release(); // frees up device RAM when closing
+      }
+    };
+  }, [modelReady]);
+
   // load all stored data variable
   const loadInitialData = () => {
     try {
       const savedTheme = storage.getString(THEME_STORAGE_KEY);
       const savedName = storage.getString(USER_NAME_KEY);
       const savedMessages = storage.getString(CHAT_STORAGE_KEY);
+      const savedPrompt = storage.getString(SYSTEM_PROMPT_KEY); // NEW
 
-      if (savedTheme !== null) {
+      if (savedPrompt) {
+        setSystemPrompt(savedPrompt);
+      }
+
+      if (savedTheme) {
         setIsDarkMode(savedTheme === "dark");
       }
 
       const currentUserName = savedName || "Guest";
       setUserName(currentUserName);
 
-      if (savedMessages !== null) {
+      if (savedMessages) {
         setMessages(JSON.parse(savedMessages));
       } else {
         // default welcome message using stored username
@@ -259,6 +326,35 @@ export default function App() {
       }
     } catch (e) {
       console.error("Failed to load initial data:", e);
+    }
+  };
+
+  // download the slm
+  const downloadModel = async () => {
+    setIsDownloading(true);
+    try {
+      const downloadResumable = FileSystem.createDownloadResumable(
+        MODEL_URL,
+        MODEL_PATH,
+        {},
+        (downloadProgress) => {
+          const progress =
+            downloadProgress.totalBytesWritten /
+            downloadProgress.totalBytesExpectedToWrite;
+          setDownloadProgress((progress * 100).toFixed(1));
+        },
+      );
+
+      const { uri } = await downloadResumable.downloadAsync();
+      console.log("Model downloaded to:", uri);
+      setModelReady(true);
+      storage.set("modelDownloaded", true); // save the state so we know it's there next time
+      Alert.alert("Success", "Companion AI downloaded and ready!");
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Error", "Failed to download the model.");
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -278,6 +374,15 @@ export default function App() {
       storage.set(USER_NAME_KEY, name);
     } catch (e) {
       console.error("Failed to save username:", e);
+    }
+  };
+
+  const saveSystemPrompt = () => {
+    try {
+      storage.set(SYSTEM_PROMPT_KEY, systemPrompt);
+      setIsPromptModalVisible(false);
+    } catch (e) {
+      console.error("Failed to save system prompt:", e);
     }
   };
 
@@ -423,6 +528,7 @@ export default function App() {
           text: `Got it! I've updated your name to ${detectedName}.`,
           sender: "ai",
         };
+        setAnimatingMessageId(aiMsg.id);
         const final = [...updatedWithUser, aiMsg];
         setMessages(final);
         saveChatHistory(final);
@@ -447,7 +553,7 @@ export default function App() {
         text: `🔍 Web Search Result:\n\n${searchResult}`,
         sender: "ai",
       };
-
+      setAnimatingMessageId(aiMsg.id);
       const updatedWithSearch = [...updatedWithUser, aiMsg];
       setMessages(updatedWithSearch);
       saveChatHistory(updatedWithSearch);
@@ -458,7 +564,8 @@ export default function App() {
         100,
       );
     } else {
-      setTimeout(() => {
+      // mock ai
+      /*setTimeout(() => {
         const aiMsg = {
           id: (Date.now() + 1).toString(),
           text: `This is a saved simulated response, ${userName}! History will persist.`,
@@ -473,7 +580,61 @@ export default function App() {
           () => flatListRef.current?.scrollToEnd({ animated: true }),
           100,
         );
-      }, 1500);
+      }, 1500);*/
+
+      // real slm
+      // check if the AI is actually loaded into RAM
+      if (!llamaContext) {
+        Alert.alert(
+          "AI Not Ready",
+          "Please download the model from settings or wait for it to load.",
+        );
+        setIsTyping(false);
+        return;
+      }
+
+      try {
+        // format the conversation history for Llama
+        // map message objects into the format the model expects: "User: Hello \n Assistant: Hi!"
+        let formattedHistory = `${systemPrompt}\n\n`;
+        updatedWithUser.forEach((msg) => {
+          if (msg.id !== "welcome") {
+            // skip the hardcoded welcome message
+            const role = msg.sender === "user" ? userName : "Assistant";
+            formattedHistory += `${role}: ${msg.text}\n`;
+          }
+        });
+        formattedHistory += "Assistant:"; // Prompt the AI to start speaking
+
+        // ask the AI to generate a response
+        const response = await llamaContext.completion({
+          prompt: formattedHistory,
+          n_predict: 150, // max words to generate
+          temperature: 0.7, // adds slight creativity/personality
+          stop: ["\nUser:", `\n${userName}:`, "\nAssistant:"], // tells the AI to stop generating when it thinks it's user's turn to speak
+        });
+
+        // output the result to the chat
+        const aiMsg = {
+          id: (Date.now() + 1).toString(),
+          text: response.text.trim(),
+          sender: "ai",
+        };
+        setAnimatingMessageId(aiMsg.id);
+        const finalMessages = [...updatedWithUser, aiMsg];
+        setMessages(finalMessages);
+        saveChatHistory(finalMessages);
+        setIsTyping(false);
+
+        setTimeout(
+          () => flatListRef.current?.scrollToEnd({ animated: true }),
+          100,
+        );
+      } catch (error) {
+        console.error("Generation error:", error);
+        setIsTyping(false);
+        Alert.alert("Error", "The AI failed to generate a response.");
+      }
     }
   };
 
@@ -528,6 +689,55 @@ export default function App() {
               />
             </View>
 
+            <View style={styles.settingRow}>
+              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>
+                Companion AI Model
+              </Text>
+
+              {modelReady ? (
+                <Text style={{ color: "#34C759", fontWeight: "bold" }}>
+                  Installed ✓
+                </Text>
+              ) : isDownloading ? (
+                <Text style={{ color: "#007AFF" }}>{downloadProgress}%</Text>
+              ) : (
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: "#007AFF",
+                    padding: 8,
+                    borderRadius: 8,
+                  }}
+                  onPress={downloadModel}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                    Download
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {modelReady && (
+              <View style={styles.settingRow}>
+                <Text
+                  style={[styles.modalLabel, isDarkMode && styles.darkText]}
+                >
+                  Active Brain:
+                </Text>
+                <Text
+                  style={[
+                    styles.modalLabel,
+                    {
+                      color: isDarkMode ? "#aaa" : "#666",
+                      fontSize: 14,
+                      fontWeight: "normal",
+                    },
+                  ]}
+                >
+                  {MODEL_DISPLAY_NAME}
+                </Text>
+              </View>
+            )}
+
             <TouchableOpacity
               style={styles.resetButton}
               onPress={confirmResetProfile}
@@ -540,6 +750,51 @@ export default function App() {
               onPress={() => setIsSettingsVisible(false)}
             >
               <Text style={styles.closeText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isPromptModalVisible}
+        onRequestClose={() => setIsPromptModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View
+            style={[
+              styles.modalContent,
+              isDarkMode ? styles.darkModal : styles.lightModal,
+            ]}
+          >
+            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>
+              AI Personality
+            </Text>
+
+            <TextInput
+              style={[styles.promptInput, isDarkMode && styles.darkInput]}
+              value={systemPrompt}
+              onChangeText={setSystemPrompt}
+              multiline={true}
+              numberOfLines={6}
+              showsVerticalScrollIndicator={true}
+              placeholder="Enter the instructions for the AI's personality..."
+              placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
+            />
+
+            <TouchableOpacity
+              style={[styles.resetButton, { backgroundColor: "#34C759" }]}
+              onPress={saveSystemPrompt}
+            >
+              <Text style={styles.resetText}>Save Settings</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setIsPromptModalVisible(false)}
+            >
+              <Text style={styles.closeText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -560,6 +815,12 @@ export default function App() {
           </Text>
         </View>
         <View style={styles.headerControls}>
+          <TouchableOpacity
+            onPress={() => setIsPromptModalVisible(true)}
+            style={styles.gearButton}
+          >
+            <Text style={{ fontSize: 24 }}>{"📝"}</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={() => setIsSettingsVisible(true)}
             style={styles.gearButton}
@@ -582,11 +843,8 @@ export default function App() {
           onContentSizeChange={() =>
             flatListRef.current?.scrollToEnd({ animated: true })
           }
-          renderItem={({ item, index }) => {
-            const isLastMessage = index === messages.length - 1;
-            const isAi = item.sender === "ai";
-            const shouldAnimate =
-              isAi && isLastMessage && item.id !== "welcome";
+          renderItem={({ item }) => {
+            const shouldAnimate = item.id === animatingMessageId;
 
             return (
               <View
@@ -884,5 +1142,17 @@ const styles = StyleSheet.create({
   },
   darkDot: {
     backgroundColor: "#aaa",
+  },
+  promptInput: {
+    width: "100%",
+    height: 160,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 15,
+    paddingHorizontal: 15,
+    paddingVertical: 15,
+    fontSize: 16,
+    color: "#333",
+    textAlignVertical: "top",
+    marginBottom: 20,
   },
 });
