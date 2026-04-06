@@ -22,9 +22,9 @@ import { useEventListener } from 'expo'; // used to listen for the video ending
 /*
  * UAT MS688 Mobile Development
  *
- * Week 3
- * Assignment 3.1
- * * Local AI core
+ * Week 4
+ * Assignment 4.1
+ * * Local AI Chat
  *
  * By Matt Lindborg
  * * Week 1 - created the core logic and main app display
@@ -32,6 +32,8 @@ import { useEventListener } from 'expo'; // used to listen for the video ending
  * * Week 3 - converted from expo go to local expo app, added updated storage using mmkv,
  *            designed and streamlined build pipeline, connecting expo to git repo,
  *            so every push to the master branch will cause a build and deploy.
+ * * Week 4 - created and added an intro video to app, with option to disable play. 
+ *            Researched slm's to use.
  */
 
 // roadmap for future vector database integration:
@@ -358,7 +360,7 @@ export default function App() {
 
             <View style={styles.settingRow}>
               <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>
-                Show Animated Logo on Startup
+                Show Animated Logo{"\n"}on Startup
               </Text>
               <Switch
                 value={playIntroVideo}
