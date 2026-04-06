@@ -37,8 +37,8 @@ import { useEventListener } from "expo"; // used to listen for the video ending
 /*
  * UAT MS688 Mobile Development
  *
- * Week 4
- * Assignment 4.1
+ * Week 5
+ * Assignment 5.1
  * * Local AI Chat
  *
  * By Matt Lindborg
@@ -49,10 +49,13 @@ import { useEventListener } from "expo"; // used to listen for the video ending
  *            so every push to the master branch will cause a build and deploy.
  * * Week 4 - created and added an intro video to app, with option to disable play.
  *            Researched slm's to use.
+ * * Week 5 - added animation to the app, for text generation and three dots loading.
+ *            Also added the live ai model, download link in the settings, and other
+ *            quality of life updates. 
  */
 
 // roadmap for future vector database integration:
-// a. add slm support, so the ai chat actually uses an ai.
+// a. add slm support, so the ai chat actually uses an ai. ***DONE***
 // b. add model searching similar to lm studio, using hugging face api.
 // -----
 // 1. implement text embedding: convert user input into high-dimensional vectors (e.g., via onnx runtime).
