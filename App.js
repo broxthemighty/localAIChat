@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from "react";
 // imports
 import {
   View,
@@ -14,10 +14,22 @@ import {
   Modal,
   Alert,
   TouchableWithoutFeedback,
-} from 'react-native';
-import { createMMKV } from 'react-native-mmkv';
-import { useVideoPlayer, VideoView } from 'expo-video';
-import { useEventListener } from 'expo'; // used to listen for the video ending
+  LayoutAnimation,
+  UIManager,
+  Animated,
+} from "react-native";
+
+// enable LayoutAnimation for Android
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+import { createMMKV } from "react-native-mmkv";
+import { useVideoPlayer, VideoView } from "expo-video";
+import { useEventListener } from "expo"; // used to listen for the video ending
 
 /*
  * UAT MS688 Mobile Development
@@ -32,7 +44,7 @@ import { useEventListener } from 'expo'; // used to listen for the video ending
  * * Week 3 - converted from expo go to local expo app, added updated storage using mmkv,
  *            designed and streamlined build pipeline, connecting expo to git repo,
  *            so every push to the master branch will cause a build and deploy.
- * * Week 4 - created and added an intro video to app, with option to disable play. 
+ * * Week 4 - created and added an intro video to app, with option to disable play.
  *            Researched slm's to use.
  */
 
@@ -49,16 +61,124 @@ import { useEventListener } from 'expo'; // used to listen for the video ending
 const storage = createMMKV();
 
 // storage key variables
-const CHAT_STORAGE_KEY = '@chat_history';
-const THEME_STORAGE_KEY = '@theme_setting';
-const USER_NAME_KEY = '@user_name';
+const CHAT_STORAGE_KEY = "@chat_history";
+const THEME_STORAGE_KEY = "@theme_setting";
+const USER_NAME_KEY = "@user_name";
+
+// three animated dots for ai processing
+const TypingIndicator = ({ isDarkMode }) => {
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+  const dot3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animateDot = (dot, delay) => {
+      return Animated.sequence([
+        Animated.delay(delay),
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(dot, {
+              toValue: 1,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+            Animated.timing(dot, {
+              toValue: 0,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+          ]),
+        ),
+      ]);
+    };
+
+    // run all three dot animations in parallel, staggered by the delay
+    Animated.parallel([
+      animateDot(dot1, 0),
+      animateDot(dot2, 150),
+      animateDot(dot3, 300),
+    ]).start();
+  }, [dot1, dot2, dot3]);
+
+  // interpolate the 0-1 values into vertical movement and opacity
+  const dotStyle = (dot) => ({
+    opacity: dot.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.3, 1],
+    }),
+    transform: [
+      {
+        translateY: dot.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -6],
+        }),
+      },
+    ],
+  });
+
+  return (
+    <View style={styles.typingContainer}>
+      <Animated.View
+        style={[
+          styles.dot,
+          isDarkMode ? styles.darkDot : styles.lightDot,
+          dotStyle(dot1),
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.dot,
+          isDarkMode ? styles.darkDot : styles.lightDot,
+          dotStyle(dot2),
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.dot,
+          isDarkMode ? styles.darkDot : styles.lightDot,
+          dotStyle(dot3),
+        ]}
+      />
+    </View>
+  );
+};
+
+// typewriter text animation
+const TypeWriterText = ({ text, style, onTypingComplete, scrollViewRef }) => {
+  const [displayedText, setDisplayedText] = useState("");
+  const index = useRef(0);
+
+  useEffect(() => {
+    index.current = 0;
+    setDisplayedText("");
+
+    const timer = setInterval(() => {
+      if (index.current < text.length) {
+        setDisplayedText((prev) => prev + text.charAt(index.current));
+        index.current++;
+
+        // gently scroll to bottom as text expands
+        if (index.current % 15 === 0 && scrollViewRef?.current) {
+          scrollViewRef.current.scrollToEnd({ animated: true });
+        }
+      } else {
+        clearInterval(timer);
+        if (onTypingComplete) onTypingComplete();
+      }
+    }, 20); // typing speed
+
+    return () => clearInterval(timer);
+  }, [text]);
+
+  return <Text style={style}>{displayedText}</Text>;
+};
 
 // main app
 export default function App() {
   // state variables
   const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState('');
-  const [userName, setUserName] = useState('');
+  const [inputText, setInputText] = useState("");
+  const [userName, setUserName] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
@@ -66,22 +186,25 @@ export default function App() {
 
   // read from storage on startup. default to 'true' if the key doesn't exist yet.
   const [playIntroVideo, setPlayIntroVideo] = useState(
-    storage.getBoolean('showSplashVideo') ?? true
+    storage.getBoolean("showSplashVideo") ?? true,
   );
-  // if playIntroVideo is false, isVideoFinished starts as true, 
+  // if playIntroVideo is false, isVideoFinished starts as true,
   // skipping the splash screen.
   const [isVideoFinished, setIsVideoFinished] = useState(!playIntroVideo);
 
   // initialize the expo-video player
-  const player = useVideoPlayer(require('./assets/Synthlizard_Studios_Logo_Animated.mp4'), (player) => {
-    player.loop = false;
-    if (playIntroVideo) {
-      player.play(); // auto-play if settings allow it
-    }
-  });
+  const player = useVideoPlayer(
+    require("./assets/Synthlizard_Studios_Logo_Animated.mp4"),
+    (player) => {
+      player.loop = false;
+      if (playIntroVideo) {
+        player.play(); // auto-play if settings allow it
+      }
+    },
+  );
 
   // listen for the exact moment the video finishes
-  useEventListener(player, 'playToEnd', () => {
+  useEventListener(player, "playToEnd", () => {
     setIsVideoFinished(true);
   });
 
@@ -94,12 +217,12 @@ export default function App() {
 
     // keyboard listeners for dynamic height tracking
     const showSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      (e) => setKeyboardHeight(e.endCoordinates.height)
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
+      (e) => setKeyboardHeight(e.endCoordinates.height),
     );
     const hideSub = Keyboard.addListener(
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setKeyboardHeight(0)
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
+      () => setKeyboardHeight(0),
     );
 
     return () => {
@@ -116,10 +239,10 @@ export default function App() {
       const savedMessages = storage.getString(CHAT_STORAGE_KEY);
 
       if (savedTheme !== null) {
-        setIsDarkMode(savedTheme === 'dark');
+        setIsDarkMode(savedTheme === "dark");
       }
 
-      const currentUserName = savedName || 'Guest';
+      const currentUserName = savedName || "Guest";
       setUserName(currentUserName);
 
       if (savedMessages !== null) {
@@ -128,14 +251,14 @@ export default function App() {
         // default welcome message using stored username
         setMessages([
           {
-            id: 'welcome',
+            id: "welcome",
             text: `Hello, ${currentUserName}! I am your local AI. Type 'search [topic]' to search the web.`,
-            sender: 'ai',
-          }
+            sender: "ai",
+          },
         ]);
       }
     } catch (e) {
-      console.error('Failed to load initial data:', e);
+      console.error("Failed to load initial data:", e);
     }
   };
 
@@ -144,7 +267,7 @@ export default function App() {
     try {
       storage.set(CHAT_STORAGE_KEY, JSON.stringify(newMessages));
     } catch (e) {
-      console.error('Failed to save chat history:', e);
+      console.error("Failed to save chat history:", e);
     }
   };
 
@@ -154,7 +277,7 @@ export default function App() {
       setUserName(name);
       storage.set(USER_NAME_KEY, name);
     } catch (e) {
-      console.error('Failed to save username:', e);
+      console.error("Failed to save username:", e);
     }
   };
 
@@ -163,9 +286,9 @@ export default function App() {
     try {
       const newMode = !isDarkMode;
       setIsDarkMode(newMode);
-      storage.set(THEME_STORAGE_KEY, newMode ? 'dark' : 'light');
+      storage.set(THEME_STORAGE_KEY, newMode ? "dark" : "light");
     } catch (e) {
-      console.error('Failed to save theme preference:', e);
+      console.error("Failed to save theme preference:", e);
     }
   };
 
@@ -176,8 +299,8 @@ export default function App() {
       "This will clear your username and theme settings. Chat history will be untouched.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Reset", style: "destructive", onPress: resetProfile }
-      ]
+        { text: "Reset", style: "destructive", onPress: resetProfile },
+      ],
     );
   };
 
@@ -187,10 +310,10 @@ export default function App() {
       storage.remove(THEME_STORAGE_KEY);
       storage.remove(USER_NAME_KEY);
       setIsDarkMode(false);
-      setUserName('Guest');
+      setUserName("Guest");
       setIsSettingsVisible(false);
     } catch (e) {
-      console.error('Failed to reset profile:', e);
+      console.error("Failed to reset profile:", e);
     }
   };
 
@@ -198,33 +321,41 @@ export default function App() {
   const clearChat = () => {
     try {
       storage.remove(CHAT_STORAGE_KEY);
-      const resetMessage = [{
-        id: Date.now().toString(),
-        text: "Chat history cleared. How can I help you?",
-        sender: 'ai',
-      }];
+      const resetMessage = [
+        {
+          id: Date.now().toString(),
+          text: "Chat history cleared. How can I help you?",
+          sender: "ai",
+        },
+      ];
       setMessages(resetMessage);
       saveChatHistory(resetMessage);
     } catch (e) {
-      console.error('Failed to clear chat:', e);
+      console.error("Failed to clear chat:", e);
     }
   };
 
   // duck duck go fetch variable
   const fetchDuckDuckGo = async (query) => {
     try {
-      const response = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`);
+      const response = await fetch(
+        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`,
+      );
       const data = await response.json();
 
       if (data.AbstractText) {
         return data.AbstractText;
-      } else if (data.RelatedTopics && data.RelatedTopics.length > 0 && data.RelatedTopics[0].Text) {
+      } else if (
+        data.RelatedTopics &&
+        data.RelatedTopics.length > 0 &&
+        data.RelatedTopics[0].Text
+      ) {
         return data.RelatedTopics[0].Text;
       } else {
         return "I searched DuckDuckGo, but I couldn't find a quick summary for that.";
       }
     } catch (error) {
-      console.error('DDG fetch error:', error);
+      console.error("DDG fetch error:", error);
       return "Sorry, my internet connection seems to be down.";
     }
   };
@@ -232,7 +363,7 @@ export default function App() {
   // function to handle the toggle in settings window
   const handleToggleVideo = (value) => {
     setPlayIntroVideo(value);
-    storage.set('showSplashVideo', value); // save preference
+    storage.set("showSplashVideo", value); // save preference
   };
 
   // splash screen logo
@@ -244,7 +375,7 @@ export default function App() {
           style={styles.videoPlayer}
           player={player}
           nativeControls={false} // hide the playback controls
-          contentFit="contain"   // centers video with black background
+          contentFit="contain" // centers video with black background
         />
       </View>
     );
@@ -252,32 +383,37 @@ export default function App() {
 
   // handle message send variable
   const handleSend = async () => {
-    if (inputText.trim() === '') return;
+    if (inputText.trim() === "") return;
 
     // keyboard dismissal on send
     Keyboard.dismiss();
 
     const currentInput = inputText;
-    const userMsg = { 
-      id: Date.now().toString(), 
-      text: currentInput, 
-      sender: 'user' 
+    const userMsg = {
+      id: Date.now().toString(),
+      text: currentInput,
+      sender: "user",
     };
-    
+
+    // trigger smooth layout animation before state update
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
     // update state and save to storage
     const updatedWithUser = [...messages, userMsg];
     setMessages(updatedWithUser);
     saveChatHistory(updatedWithUser);
-    
-    setInputText('');
+
+    setInputText("");
     setIsTyping(true);
 
     const lowerInput = currentInput.toLowerCase();
-    
+
     // check for name change command
     let detectedName = null;
-    if (lowerInput.startsWith("my name is ")) detectedName = currentInput.substring(11).trim();
-    else if (lowerInput.startsWith("call me ")) detectedName = currentInput.substring(8).trim();
+    if (lowerInput.startsWith("my name is "))
+      detectedName = currentInput.substring(11).trim();
+    else if (lowerInput.startsWith("call me "))
+      detectedName = currentInput.substring(8).trim();
 
     if (detectedName) {
       await saveUserName(detectedName);
@@ -285,58 +421,73 @@ export default function App() {
         const aiMsg = {
           id: Date.now().toString(),
           text: `Got it! I've updated your name to ${detectedName}.`,
-          sender: 'ai',
+          sender: "ai",
         };
         const final = [...updatedWithUser, aiMsg];
         setMessages(final);
         saveChatHistory(final);
         setIsTyping(false);
         // explicit scroll call
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+        setTimeout(
+          () => flatListRef.current?.scrollToEnd({ animated: true }),
+          100,
+        );
       }, 1000);
       return;
     }
 
-    const isSearchCommand = lowerInput.startsWith('search ');
+    const isSearchCommand = lowerInput.startsWith("search ");
 
     if (isSearchCommand) {
       const query = currentInput.substring(7);
       const searchResult = await fetchDuckDuckGo(query);
-      
+
       const aiMsg = {
         id: (Date.now() + 1).toString(),
         text: `🔍 Web Search Result:\n\n${searchResult}`,
-        sender: 'ai',
+        sender: "ai",
       };
-      
+
       const updatedWithSearch = [...updatedWithUser, aiMsg];
       setMessages(updatedWithSearch);
       saveChatHistory(updatedWithSearch);
       setIsTyping(false);
       // explicit scroll call
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      setTimeout(
+        () => flatListRef.current?.scrollToEnd({ animated: true }),
+        100,
+      );
     } else {
       setTimeout(() => {
         const aiMsg = {
           id: (Date.now() + 1).toString(),
           text: `This is a saved simulated response, ${userName}! History will persist.`,
-          sender: 'ai',
+          sender: "ai",
         };
         const updatedWithMock = [...updatedWithUser, aiMsg];
         setMessages(updatedWithMock);
         saveChatHistory(updatedWithMock);
         setIsTyping(false);
         // explicit scroll call
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+        setTimeout(
+          () => flatListRef.current?.scrollToEnd({ animated: true }),
+          100,
+        );
       }, 1500);
     }
   };
 
   // start of render
   return (
-    <View style={[styles.container, isDarkMode && styles.darkContainer, { paddingBottom: keyboardHeight }]}>
+    <View
+      style={[
+        styles.container,
+        isDarkMode && styles.darkContainer,
+        { paddingBottom: keyboardHeight },
+      ]}
+    >
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} />
-      
+
       <Modal
         animationType="fade"
         transparent={true}
@@ -344,15 +495,22 @@ export default function App() {
         onRequestClose={() => setIsSettingsVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, isDarkMode ? styles.darkModal : styles.lightModal]}>
-            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>Settings</Text>
-            
+          <View
+            style={[
+              styles.modalContent,
+              isDarkMode ? styles.darkModal : styles.lightModal,
+            ]}
+          >
+            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>
+              Settings
+            </Text>
+
             <View style={styles.settingRow}>
               <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>
-                Theme: {isDarkMode ? 'Dark' : 'Light'}
+                Theme: {isDarkMode ? "Dark" : "Light"}
               </Text>
-              <Switch 
-                value={isDarkMode} 
+              <Switch
+                value={isDarkMode}
                 onValueChange={toggleTheme}
                 trackColor={{ false: "#767577", true: "#34C759" }}
               />
@@ -370,11 +528,17 @@ export default function App() {
               />
             </View>
 
-            <TouchableOpacity style={styles.resetButton} onPress={confirmResetProfile}>
+            <TouchableOpacity
+              style={styles.resetButton}
+              onPress={confirmResetProfile}
+            >
               <Text style={styles.resetText}>Reset User Profile</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.closeButton} onPress={() => setIsSettingsVisible(false)}>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setIsSettingsVisible(false)}
+            >
               <Text style={styles.closeText}>Close</Text>
             </TouchableOpacity>
           </View>
@@ -383,14 +547,24 @@ export default function App() {
 
       <View style={[styles.header, isDarkMode && styles.darkHeader]}>
         <View style={styles.headerLeft}>
-          <Text style={[styles.title, isDarkMode && styles.darkText]}>Local AI</Text>
-          <Text style={[styles.userLabel, isDarkMode ? styles.darkText : styles.lightText]}>
+          <Text style={[styles.title, isDarkMode && styles.darkText]}>
+            Local AI
+          </Text>
+          <Text
+            style={[
+              styles.userLabel,
+              isDarkMode ? styles.darkText : styles.lightText,
+            ]}
+          >
             User: {userName}
           </Text>
         </View>
         <View style={styles.headerControls}>
-          <TouchableOpacity onPress={() => setIsSettingsVisible(true)} style={styles.gearButton}>
-            <Text style={{fontSize: 24}}>{'⚙️'}</Text>
+          <TouchableOpacity
+            onPress={() => setIsSettingsVisible(true)}
+            style={styles.gearButton}
+          >
+            <Text style={{ fontSize: 24 }}>{"⚙️"}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
             <Text style={styles.clearText}>Clear</Text>
@@ -405,29 +579,64 @@ export default function App() {
           keyExtractor={(item) => item.id}
           style={styles.chatList}
           contentContainerStyle={styles.chatContainer}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          renderItem={({ item }) => (
-            <View style={[
-              styles.messageWrapper,
-              item.sender === 'user' ? styles.userWrapper : (isDarkMode ? styles.darkAiWrapper : styles.aiWrapper)
-            ]}>
-              <Text style={[styles.messageText, item.sender === 'user' ? styles.userText : (isDarkMode ? styles.darkText : styles.aiText)]}>
-                {item.text}
-              </Text>
-            </View>
-          )}
+          onContentSizeChange={() =>
+            flatListRef.current?.scrollToEnd({ animated: true })
+          }
+          renderItem={({ item, index }) => {
+            const isLastMessage = index === messages.length - 1;
+            const isAi = item.sender === "ai";
+            const shouldAnimate =
+              isAi && isLastMessage && item.id !== "welcome";
+
+            return (
+              <View
+                style={[
+                  styles.messageWrapper,
+                  item.sender === "user"
+                    ? styles.userWrapper
+                    : isDarkMode
+                      ? styles.darkAiWrapper
+                      : styles.aiWrapper,
+                ]}
+              >
+                {shouldAnimate ? (
+                  <TypeWriterText
+                    text={item.text}
+                    style={[
+                      styles.messageText,
+                      isDarkMode ? styles.darkText : styles.aiText,
+                    ]}
+                    scrollViewRef={flatListRef}
+                  />
+                ) : (
+                  <Text
+                    style={[
+                      styles.messageText,
+                      item.sender === "user"
+                        ? styles.userText
+                        : isDarkMode
+                          ? styles.darkText
+                          : styles.aiText,
+                    ]}
+                  >
+                    {item.text}
+                  </Text>
+                )}
+              </View>
+            );
+          }}
         />
       </TouchableWithoutFeedback>
 
-      {isTyping && (
-        <Text style={styles.typingIndicator}>AI is processing...</Text>
-      )}
+      {isTyping && <TypingIndicator isDarkMode={isDarkMode} />}
 
-      <View style={[
-        styles.inputRow, 
-        isDarkMode && styles.darkHeader, 
-        { paddingBottom: keyboardHeight > 0 ? 55 : 50 }
-      ]}>
+      <View
+        style={[
+          styles.inputRow,
+          isDarkMode && styles.darkHeader,
+          { paddingBottom: keyboardHeight > 0 ? 55 : 50 },
+        ]}
+      >
         <TextInput
           style={[styles.input, isDarkMode && styles.darkInput]}
           value={inputText}
@@ -435,7 +644,12 @@ export default function App() {
           placeholder="Type a message..."
           placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
           multiline={true}
-          onFocus={() => setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 200)}
+          onFocus={() =>
+            setTimeout(
+              () => flatListRef.current?.scrollToEnd({ animated: true }),
+              200,
+            )
+          }
         />
         <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
           <Text style={styles.sendText}>Send</Text>
@@ -447,209 +661,228 @@ export default function App() {
 
 // style sheet
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: '#f5f5f5',
+  container: {
+    flex: 1,
+    backgroundColor: "#f5f5f5",
   },
-  darkContainer: { 
-    backgroundColor: '#1c1c1e',
+  darkContainer: {
+    backgroundColor: "#1c1c1e",
   },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingTop: 50, 
-    paddingHorizontal: 20, 
-    paddingBottom: 10, 
-    backgroundColor: '#fff', 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#ddd',
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 50,
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#ddd",
   },
-  darkHeader: { 
-    backgroundColor: '#2c2c2e', 
-    borderBottomColor: '#3a3a3c',
+  darkHeader: {
+    backgroundColor: "#2c2c2e",
+    borderBottomColor: "#3a3a3c",
   },
-  headerLeft: { 
+  headerLeft: {
     flex: 1,
   },
-  headerControls: { 
-    flexDirection: 'row', 
-    alignItems: 'center',
+  headerControls: {
+    flexDirection: "row",
+    alignItems: "center",
   },
-  userLabel: { 
-    fontSize: 12, 
-    fontWeight: 'bold', 
+  userLabel: {
+    fontSize: 12,
+    fontWeight: "bold",
     marginTop: 2,
   },
-  title: { 
-    fontSize: 20, 
-    fontWeight: 'bold', 
-    color: '#333',
+  title: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#333",
   },
-  lightText: { 
-    color: '#333',
+  lightText: {
+    color: "#333",
   },
-  darkText: { 
-    color: '#fff',
+  darkText: {
+    color: "#fff",
   },
-  gearButton: { 
+  gearButton: {
     marginRight: 15,
   },
-  clearButton: { 
-    padding: 8, 
-    backgroundColor: '#ff3b30', 
+  clearButton: {
+    padding: 8,
+    backgroundColor: "#ff3b30",
     borderRadius: 8,
   },
-  clearText: { 
-    color: '#fff', 
-    fontWeight: 'bold', 
+  clearText: {
+    color: "#fff",
+    fontWeight: "bold",
     fontSize: 12,
   },
-  chatList: { 
+  chatList: {
     flex: 1,
   },
-  chatContainer: { 
-    padding: 15, 
+  chatContainer: {
+    padding: 15,
     paddingBottom: 20,
   },
-  messageWrapper: { 
-    maxWidth: '80%', 
-    padding: 12, 
-    borderRadius: 15, 
+  messageWrapper: {
+    maxWidth: "80%",
+    padding: 12,
+    borderRadius: 15,
     marginBottom: 10,
   },
-  userWrapper: { 
-    alignSelf: 'flex-end', 
-    backgroundColor: '#007AFF', 
+  userWrapper: {
+    alignSelf: "flex-end",
+    backgroundColor: "#007AFF",
     borderBottomRightRadius: 5,
   },
-  aiWrapper: { 
-    alignSelf: 'flex-start', 
-    backgroundColor: '#e5e5ea', 
+  aiWrapper: {
+    alignSelf: "flex-start",
+    backgroundColor: "#e5e5ea",
     borderBottomLeftRadius: 5,
   },
-  darkAiWrapper: { 
-    alignSelf: 'flex-start', 
-    backgroundColor: '#3a3a3c', 
+  darkAiWrapper: {
+    alignSelf: "flex-start",
+    backgroundColor: "#3a3a3c",
     borderBottomLeftRadius: 5,
   },
-  messageText: { 
-    fontSize: 16, 
+  messageText: {
+    fontSize: 16,
     lineHeight: 22,
   },
-  userText: { 
-    color: '#fff',
+  userText: {
+    color: "#fff",
   },
-  aiText: { 
-    color: '#000',
+  aiText: {
+    color: "#000",
   },
-  typingIndicator: { 
-    paddingHorizontal: 20, 
-    paddingBottom: 10, 
-    color: '#888', 
-    fontStyle: 'italic',
+  typingIndicator: {
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    color: "#888",
+    fontStyle: "italic",
   },
-  inputRow: { 
-    flexDirection: 'row', 
+  inputRow: {
+    flexDirection: "row",
     paddingHorizontal: 15,
     paddingTop: 10,
-    backgroundColor: '#fff', 
-    borderTopWidth: 1, 
-    borderColor: '#ddd', 
-    alignItems: 'center',
+    backgroundColor: "#fff",
+    borderTopWidth: 1,
+    borderColor: "#ddd",
+    alignItems: "center",
   },
-  input: { 
-    flex: 1, 
-    minHeight: 40, 
-    maxHeight: 100, 
-    backgroundColor: '#f0f0f0', 
-    borderRadius: 20, 
-    paddingHorizontal: 15, 
+  input: {
+    flex: 1,
+    minHeight: 40,
+    maxHeight: 100,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 20,
+    paddingHorizontal: 15,
     paddingVertical: 10,
-    fontSize: 16, 
-    color: '#333',
+    fontSize: 16,
+    color: "#333",
   },
-  darkInput: { 
-    backgroundColor: '#3a3a3c', 
-    color: '#fff',
+  darkInput: {
+    backgroundColor: "#3a3a3c",
+    color: "#fff",
   },
-  sendButton: { 
-    marginLeft: 10, 
-    backgroundColor: '#111', 
-    paddingHorizontal: 20, 
-    paddingVertical: 10, 
-    borderRadius: 20, 
-    justifyContent: 'center',
+  sendButton: {
+    marginLeft: 10,
+    backgroundColor: "#111",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    justifyContent: "center",
   },
-  sendText: { 
-    color: '#fff', 
-    fontWeight: 'bold', 
+  sendText: {
+    color: "#fff",
+    fontWeight: "bold",
     fontSize: 16,
   },
-  modalOverlay: { 
-    flex: 1, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  modalOverlay: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.5)",
   },
-  modalContent: { 
-    width: '85%', 
-    borderRadius: 25, 
-    padding: 30, 
-    alignItems: 'center', 
+  modalContent: {
+    width: "85%",
+    borderRadius: 25,
+    padding: 30,
+    alignItems: "center",
     elevation: 20,
   },
-  lightModal: { 
-    backgroundColor: '#fff',
+  lightModal: {
+    backgroundColor: "#fff",
   },
-  darkModal: { 
-    backgroundColor: '#2c2c2e',
+  darkModal: {
+    backgroundColor: "#2c2c2e",
   },
-  modalTitle: { 
-    fontSize: 24, 
-    fontWeight: 'bold', 
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
     marginBottom: 25,
   },
-  modalLabel: { 
-    fontSize: 16, 
-    fontWeight: '600',
+  modalLabel: {
+    fontSize: 16,
+    fontWeight: "600",
   },
-  settingRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'space-between', 
-    width: '100%', 
+  settingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
     marginBottom: 30,
   },
-  resetButton: { 
-    backgroundColor: '#ff3b30', 
-    padding: 15, 
-    borderRadius: 15, 
-    width: '100%', 
-    alignItems: 'center', 
+  resetButton: {
+    backgroundColor: "#ff3b30",
+    padding: 15,
+    borderRadius: 15,
+    width: "100%",
+    alignItems: "center",
     marginBottom: 15,
   },
-  resetText: { 
-    color: '#fff', 
-    fontWeight: 'bold', 
+  resetText: {
+    color: "#fff",
+    fontWeight: "bold",
     fontSize: 16,
   },
-  closeButton: { 
+  closeButton: {
     marginTop: 10,
   },
-  closeText: { 
-    color: '#007AFF', 
-    fontWeight: 'bold', 
+  closeText: {
+    color: "#007AFF",
+    fontWeight: "bold",
     fontSize: 17,
   },
   videoContainer: {
     flex: 1,
-    backgroundColor: '#000', // black background prevents white flashes during load
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#000", // black background prevents white flashes during load
+    justifyContent: "center",
+    alignItems: "center",
   },
   videoPlayer: {
-    width: '100%',
-    height: '100%',
+    width: "100%",
+    height: "100%",
+  },
+  typingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 25,
+    paddingBottom: 15,
+    height: 30, // keeps the height stable while dots bounce
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  lightDot: {
+    backgroundColor: "#888",
+  },
+  darkDot: {
+    backgroundColor: "#aaa",
   },
 });
