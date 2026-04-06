@@ -843,6 +843,9 @@ export default function App() {
           onContentSizeChange={() =>
             flatListRef.current?.scrollToEnd({ animated: true })
           }
+          onLayout={() =>
+            flatListRef.current?.scrollToEnd({ animated: false })
+          }
           renderItem={({ item }) => {
             const shouldAnimate = item.id === animatingMessageId;
 
