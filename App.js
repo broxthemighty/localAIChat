@@ -803,7 +803,7 @@ export default function App() {
       <View style={[styles.header, isDarkMode && styles.darkHeader]}>
         <View style={styles.headerLeft}>
           <Text style={[styles.title, isDarkMode && styles.darkText]}>
-            Local AI
+            Local AI 
           </Text>
           <Text
             style={[
@@ -814,12 +814,20 @@ export default function App() {
             User: {userName}
           </Text>
         </View>
+        <View style={styles.statusContainer}>
+          <Text style={[styles.statusIcon, { color: llamaContext ? '#34C759' : '#888' }]}>
+            ✓
+          </Text>
+          <Text style={[styles.statusText, { color: llamaContext ? '#34C759' : '#888' }]}>
+            Model{"\n"}Loaded
+          </Text>
+        </View>
         <View style={styles.headerControls}>
           <TouchableOpacity
             onPress={() => setIsPromptModalVisible(true)}
             style={styles.gearButton}
           >
-            <Text style={{ fontSize: 24 }}>{"📝"}</Text>
+            <Text style={{ fontSize: 24 }}>{"  📝"}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => setIsSettingsVisible(true)}
@@ -1157,5 +1165,25 @@ const styles = StyleSheet.create({
     color: "#333",
     textAlignVertical: "top",
     marginBottom: 20,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  statusContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 10,
+    marginTop: 2,
+  },
+  statusIcon: {
+    fontSize: 16,
+    fontWeight: "bold",
+    marginRight: 4,
+  },
+  statusText: {
+    fontSize: 10,
+    fontWeight: "bold",
+    lineHeight: 12,
   },
 });
