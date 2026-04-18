@@ -17,6 +17,7 @@ import {
   LayoutAnimation,
   UIManager,
   Animated,
+  ScrollView,
 } from "react-native";
 
 // enable LayoutAnimation for Android
@@ -37,8 +38,8 @@ import { useEventListener } from "expo"; // used to listen for the video ending
 /*
  * UAT MS688 Mobile Development
  *
- * Week 5
- * Assignment 5.1
+ * Week 6
+ * Assignment 6.2
  * * Local AI Chat
  *
  * By Matt Lindborg
@@ -52,6 +53,8 @@ import { useEventListener } from "expo"; // used to listen for the video ending
  * * Week 5 - added animation to the app, for text generation and three dots loading.
  *            Also added the live ai model, download link in the settings, and other
  *            quality of life updates. 
+ * * Week 6 - added a proof of concept (POC) for the integration of the vector database,
+ *            putting it under Vector DB Pipeline as a modal to get to it through settings.
  */
 
 // roadmap for future vector database integration:
@@ -62,6 +65,31 @@ import { useEventListener } from "expo"; // used to listen for the video ending
 // 2. setup local vector store: integrate a mobile-compatible vector library (like sqlite-vss) to replace json-based history. (need a schema that works)
 // 3. semantic search: enable the ai to "remember" context by searching the database for visually/thematically similar past messages.
 // 4. context windowing: feed retrieved vector results back into the ai prompt for "long-term memory" capabilities.
+
+// This function calculates Cosine Similarity. If retrieval fails or returns weird matches,
+// I have placed console.logs inside handleRetrieveMemoryPOC to output the exact 
+// score generated here, allowing me to debug the math logic without crashing the UI.
+// --- vector database POC utility ---
+const generateMockEmbedding = (text) => {
+  console.log("[Embedding] Generating embedding for text length:", text.length);
+  const vector = new Array(5).fill(0).map((_, i) => {
+    return (text.charCodeAt(i % text.length) || 1) / 100;
+  });
+  console.log("[Embedding] Vector size:", vector.length);
+  return vector;
+};
+
+const cosineSimilarity = (vecA, vecB) => {
+  let dotProduct = 0, normA = 0, normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += Math.pow(vecA[i], 2);
+    normB += Math.pow(vecB[i], 2);
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+};
+// -------------------------------
 
 // MMKV storage instance
 const storage = createMMKV();
@@ -194,6 +222,13 @@ export default function App() {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [llamaContext, setLlamaContext] = useState(null);
   const [animatingMessageId, setAnimatingMessageId] = useState(null);
+
+  // vector poc variables
+  const [isVectorPOCVisible, setIsVectorPOCVisible] = useState(false);
+  const [pocMemoryInput, setPocMemoryInput] = useState("");
+  const [pocQueryInput, setPocQueryInput] = useState("");
+  const [pocVectorDB, setPocVectorDB] = useState([]);
+  const [pocRetrievedResults, setPocRetrievedResults] = useState([]);
 
   // slm variables
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -489,6 +524,57 @@ export default function App() {
     );
   }
 
+  // --- vector POC pipeline stuff --- //
+  const handleSaveMemoryPOC = () => {
+    if (!pocMemoryInput.trim()) return;
+    try {
+      console.log("\n--- NEW MEMORY PIPELINE ---");
+      console.log("[Memory] Raw input:", pocMemoryInput);
+      const normalizedText = pocMemoryInput.trim().toLowerCase();
+      const embedding = generateMockEmbedding(normalizedText);
+      const memoryId = Date.now().toString();
+      
+      const newRecord = {
+        id: memoryId,
+        text: pocMemoryInput,
+        vector: embedding,
+      };
+
+      setPocVectorDB(prevDB => [...prevDB, newRecord]);
+      console.log("[VectorDB] Inserting memory entry with id:", memoryId);
+      
+      setPocMemoryInput('');
+      Alert.alert("Success", "Memory stored in mock Vector DB.");
+    } catch (error) {
+      console.error("[MemoryPipeline] Failure during insertion:", error);
+    }
+  };
+
+  const handleRetrieveMemoryPOC = () => {
+    if (!pocQueryInput.trim() || pocVectorDB.length === 0) {
+      Alert.alert("Notice", "Enter a query and ensure the database has memories.");
+      return;
+    }
+    try {
+      console.log("\n--- RETRIEVAL PIPELINE ---");
+      console.log("[Search] User query:", pocQueryInput);
+      const queryEmbedding = generateMockEmbedding(pocQueryInput.trim().toLowerCase());
+
+      const scoredMemories = pocVectorDB.map(record => ({
+        ...record,
+        score: cosineSimilarity(queryEmbedding, record.vector)
+      }));
+
+      scoredMemories.sort((a, b) => b.score - a.score);
+      const topMatches = scoredMemories.filter(m => m.score > 0.8).slice(0, 3);
+      
+      console.log("[Search] Top matches:", topMatches.map(m => ({ id: m.id, score: m.score.toFixed(3) })));
+      setPocRetrievedResults(topMatches);
+    } catch (error) {
+      console.error("[MemoryPipeline] Failure during retrieval:", error);
+    }
+  };
+
   // handle message send variable
   const handleSend = async () => {
     if (inputText.trim() === "") return;
@@ -742,6 +828,16 @@ export default function App() {
             )}
 
             <TouchableOpacity
+              style={[styles.resetButton, { backgroundColor: "#8E8D8A", marginBottom: 15 }]}
+              onPress={() => {
+                setIsSettingsVisible(false); // Close settings
+                setIsVectorPOCVisible(true); // Open POC
+              }}
+            >
+              <Text style={styles.resetText}>Open Vector DB Testing</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               style={styles.resetButton}
               onPress={confirmResetProfile}
             >
@@ -798,6 +894,71 @@ export default function App() {
               onPress={() => setIsPromptModalVisible(false)}
             >
               <Text style={styles.closeText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isVectorPOCVisible}
+        onRequestClose={() => setIsVectorPOCVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, isDarkMode ? styles.darkModal : styles.lightModal, { height: '80%' }]}>
+            <Text style={[styles.modalTitle, isDarkMode && styles.darkText, { marginBottom: 15 }]}>
+              Vector DB Pipeline
+            </Text>
+
+            {/* Step 1: Insert */}
+            <Text style={[styles.modalLabel, isDarkMode && styles.darkText, { alignSelf: 'flex-start', marginBottom: 5 }]}>
+              1. Store Memory
+            </Text>
+            <TextInput
+              style={[styles.input, isDarkMode && styles.darkInput, { width: '100%', marginBottom: 10 }]}
+              placeholder="e.g., My favorite editor is VS Code"
+              placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
+              value={pocMemoryInput}
+              onChangeText={setPocMemoryInput}
+            />
+            <TouchableOpacity style={[styles.resetButton, { backgroundColor: "#007AFF" }]} onPress={handleSaveMemoryPOC}>
+              <Text style={styles.resetText}>Save to Vector DB</Text>
+            </TouchableOpacity>
+
+            {/* Step 2: Retrieve */}
+            <Text style={[styles.modalLabel, isDarkMode && styles.darkText, { alignSelf: 'flex-start', marginBottom: 5, marginTop: 10 }]}>
+              2. Query Memory
+            </Text>
+            <TextInput
+              style={[styles.input, isDarkMode && styles.darkInput, { width: '100%', marginBottom: 10 }]}
+              placeholder="e.g., What editor do I like?"
+              placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
+              value={pocQueryInput}
+              onChangeText={setPocQueryInput}
+            />
+            <TouchableOpacity style={[styles.resetButton, { backgroundColor: "#34C759" }]} onPress={handleRetrieveMemoryPOC}>
+              <Text style={styles.resetText}>Test Retrieval Search</Text>
+            </TouchableOpacity>
+
+            {/* Step 3: Results */}
+            <View style={{ flex: 1, width: '100%', marginTop: 10, backgroundColor: isDarkMode ? '#3a3a3c' : '#f0f0f0', borderRadius: 10, padding: 10 }}>
+              <Text style={[styles.modalLabel, isDarkMode && styles.darkText, { marginBottom: 5 }]}>Results & Console Logs:</Text>
+              <ScrollView>
+                {pocRetrievedResults.length === 0 ? (
+                  <Text style={{ color: isDarkMode ? "#aaa" : "#666", fontStyle: 'italic' }}>Run a query to see similarity matches. Check VS Code terminal for full pipeline logs.</Text>
+                ) : (
+                  pocRetrievedResults.map((item) => (
+                    <View key={item.id} style={{ backgroundColor: isDarkMode ? '#2c2c2e' : '#fff', padding: 8, borderRadius: 5, marginBottom: 8 }}>
+                      <Text style={{ color: isDarkMode ? '#fff' : '#000', fontStyle: 'italic' }}>"{item.text}"</Text>
+                      <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>Score: {item.score.toFixed(3)}</Text>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+
+            <TouchableOpacity style={styles.closeButton} onPress={() => setIsVectorPOCVisible(false)}>
+              <Text style={styles.closeText}>Close Debugger</Text>
             </TouchableOpacity>
           </View>
         </View>
