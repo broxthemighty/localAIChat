@@ -34,6 +34,7 @@ import { initLlama } from "llama.rn";
 import { createMMKV } from "react-native-mmkv";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useEventListener } from "expo"; // used to listen for the video ending
+import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 
 /*
  * UAT MS688 Mobile Development
@@ -89,6 +90,21 @@ const cosineSimilarity = (vecA, vecB) => {
   if (normA === 0 || normB === 0) return 0;
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 };
+
+const generateRealEmbedding = async (text, context) => {
+  if (!context) return null;
+  try {
+    console.log("[Embedding] Requesting real vector from SLM for text length:", text.length);
+    // llama.rn returns a high-dimensional Float32Array for the input string
+    const result = await context.embedding(text);
+    console.log("[Embedding] Real vector generated successfully.");
+    return result; 
+  } catch (error) {
+    console.error("[Embedding Error]:", error);
+    return null;
+  }
+};
+
 // -------------------------------
 
 // MMKV storage instance
@@ -218,16 +234,14 @@ export default function App() {
   const [userName, setUserName] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [llamaContext, setLlamaContext] = useState(null);
   const [animatingMessageId, setAnimatingMessageId] = useState(null);
+  const [activeScreen, setActiveScreen] = useState("chat"); // 'chat' or 'settings'
 
   // vector poc variables
   const [isVectorPOCVisible, setIsVectorPOCVisible] = useState(false);
-  const [pocMemoryInput, setPocMemoryInput] = useState("");
   const [pocQueryInput, setPocQueryInput] = useState("");
-  const [pocVectorDB, setPocVectorDB] = useState([]);
   const [pocRetrievedResults, setPocRetrievedResults] = useState([]);
 
   // slm variables
@@ -313,6 +327,7 @@ export default function App() {
             use_mlock: true, // prevents the OS from paging the model out of RAM
             n_ctx: 2048, // context window size
             n_gpu_layers: 1, // uses device GPU for faster processing
+            embedding: true, // required for vectors
           });
           setLlamaContext(context);
           console.log("Llama context initialized and ready!");
@@ -337,7 +352,7 @@ export default function App() {
       const savedTheme = storage.getString(THEME_STORAGE_KEY);
       const savedName = storage.getString(USER_NAME_KEY);
       const savedMessages = storage.getString(CHAT_STORAGE_KEY);
-      const savedPrompt = storage.getString(SYSTEM_PROMPT_KEY); // NEW
+      const savedPrompt = storage.getString(SYSTEM_PROMPT_KEY);
 
       if (savedPrompt) {
         setSystemPrompt(savedPrompt);
@@ -454,7 +469,7 @@ export default function App() {
       storage.remove(USER_NAME_KEY);
       setIsDarkMode(false);
       setUserName("Guest");
-      setIsSettingsVisible(false);
+      setActiveScreen("chat");
     } catch (e) {
       console.error("Failed to reset profile:", e);
     }
@@ -524,54 +539,51 @@ export default function App() {
     );
   }
 
-  // --- vector POC pipeline stuff --- //
-  const handleSaveMemoryPOC = () => {
-    if (!pocMemoryInput.trim()) return;
-    try {
-      console.log("\n--- NEW MEMORY PIPELINE ---");
-      console.log("[Memory] Raw input:", pocMemoryInput);
-      const normalizedText = pocMemoryInput.trim().toLowerCase();
-      const embedding = generateMockEmbedding(normalizedText);
-      const memoryId = Date.now().toString();
-      
-      const newRecord = {
-        id: memoryId,
-        text: pocMemoryInput,
-        vector: embedding,
-      };
-
-      setPocVectorDB(prevDB => [...prevDB, newRecord]);
-      console.log("[VectorDB] Inserting memory entry with id:", memoryId);
-      
-      setPocMemoryInput('');
-      Alert.alert("Success", "Memory stored in mock Vector DB.");
-    } catch (error) {
-      console.error("[MemoryPipeline] Failure during insertion:", error);
-    }
-  };
-
-  const handleRetrieveMemoryPOC = () => {
-    if (!pocQueryInput.trim() || pocVectorDB.length === 0) {
-      Alert.alert("Notice", "Enter a query and ensure the database has memories.");
+  // --- memory inspector debug tool --- //
+  const handleRetrieveMemoryPOC = async () => {
+    if (!pocQueryInput.trim()) {
+      Alert.alert("Notice", "Enter a query to search your active chat memory.");
       return;
     }
+    if (!llamaContext) {
+      Alert.alert("Notice", "Please wait for the AI engine to load.");
+      return;
+    }
+
     try {
-      console.log("\n--- RETRIEVAL PIPELINE ---");
-      console.log("[Search] User query:", pocQueryInput);
-      const queryEmbedding = generateMockEmbedding(pocQueryInput.trim().toLowerCase());
-
-      const scoredMemories = pocVectorDB.map(record => ({
-        ...record,
-        score: cosineSimilarity(queryEmbedding, record.vector)
-      }));
-
-      scoredMemories.sort((a, b) => b.score - a.score);
-      const topMatches = scoredMemories.filter(m => m.score > 0.8).slice(0, 3);
+      console.log("\n--- DEBUG: MANUAL MEMORY RETRIEVAL ---");
+      console.log("[Inspector] Searching real chat history for:", pocQueryInput);
       
-      console.log("[Search] Top matches:", topMatches.map(m => ({ id: m.id, score: m.score.toFixed(3) })));
+      // vectorize the debug query
+      const queryEmbedding = await generateRealEmbedding(pocQueryInput.trim().toLowerCase(), llamaContext);
+
+      if (!queryEmbedding) {
+        console.error("[Inspector] Failed to generate query embedding.");
+        return;
+      }
+
+      const scoredMemories = [];
+
+      // scan the REAL messages array
+      messages.forEach(msg => {
+        // Only check user messages that have successfully stored vectors
+        if (msg.sender === "user" && msg.vector) {
+          const score = cosineSimilarity(queryEmbedding, msg.vector);
+          scoredMemories.push({ id: msg.id, text: msg.text, score: score });
+        }
+      });
+
+      // sort and display
+      scoredMemories.sort((a, b) => b.score - a.score);
+      
+      // grab the top 5 regardless of a threshold to visually debug weak matches
+      const topMatches = scoredMemories.slice(0, 5); 
+      
+      console.log("[Inspector] Top matches found:", topMatches.map(m => ({ score: m.score.toFixed(3), text: m.text })));
       setPocRetrievedResults(topMatches);
+      
     } catch (error) {
-      console.error("[MemoryPipeline] Failure during retrieval:", error);
+      console.error("[MemoryPipeline] Failure during manual retrieval:", error);
     }
   };
 
@@ -583,10 +595,18 @@ export default function App() {
     Keyboard.dismiss();
 
     const currentInput = inputText;
+    setIsTyping(true);
+
+    let userVector = null;
+    if (llamaContext) {
+      userVector = await generateRealEmbedding(currentInput.toLowerCase(), llamaContext);
+    }
+
     const userMsg = {
       id: Date.now().toString(),
       text: currentInput,
       sender: "user",
+      vector: userVector,
     };
 
     // trigger smooth layout animation before state update
@@ -676,13 +696,84 @@ export default function App() {
       if (!llamaContext) {
         Alert.alert(
           "AI Not Ready",
-          "Please download the model from settings or wait for it to load.",
+          "Please download the model from settings and wait for it to load.",
         );
         setIsTyping(false);
         return;
       }
 
       try {
+        // --- pipeline semantic search ---
+        console.log("\n--- INITIATING MEMORY RETRIEVAL ---");
+        const scoredMemories = [];
+
+        // compare the new user vector against all past user messages
+        if (userVector) {
+          updatedWithUser.forEach(msg => {
+            // only compare against past user messages that have a vector (ignore the current message)
+            if (msg.sender === "user" && msg.id !== userMsg.id && msg.vector) {
+              const score = cosineSimilarity(userVector, msg.vector);
+              scoredMemories.push({ text: msg.text, score: score });
+            }
+          });
+
+          // sort by highest similarity
+          scoredMemories.sort((a, b) => b.score - a.score);
+        }
+
+        // filter strict matches (threshold > 0.82) and grab the top 2
+        const topMatches = scoredMemories.filter(m => m.score > 0.82).slice(0, 2);
+        console.log("[Search] Top historical matches:", topMatches.map(m => ({ score: m.score.toFixed(3), text: m.text })));
+
+        // --- pipeline prompt injection ---
+        let formattedHistory = `${systemPrompt}\n\n`;
+
+        // if relevant memories found, secretly inject them into the system context
+        if (topMatches.length > 0) {
+          const memoryContext = topMatches.map(m => m.text).join(" | ");
+          formattedHistory += `[SYSTEM CONTEXT: The user has previously mentioned the following relevant information: ${memoryContext}]\n\n`;
+          console.log("[Prompt Injection] Added background memory:", memoryContext);
+        }
+
+        // map the recent visible conversation history
+        updatedWithUser.forEach((msg) => {
+          if (msg.id !== "welcome") {
+            const role = msg.sender === "user" ? userName : "Assistant";
+            formattedHistory += `${role}: ${msg.text}\n`;
+          }
+        });
+        formattedHistory += "Assistant:";
+
+        // --- pipeline generate aware response ---
+        console.log("[Generation] Firing SLM completion...");
+        const response = await llamaContext.completion({
+          prompt: formattedHistory,
+          n_predict: 150, 
+          temperature: 0.7, 
+          stop: ["\nUser:", `\n${userName}:`, "\nAssistant:"], 
+        });
+
+        const aiMsg = {
+          id: (Date.now() + 1).toString(),
+          text: response.text.trim(),
+          sender: "ai",
+        };
+        
+        setAnimatingMessageId(aiMsg.id);
+        const finalMessages = [...updatedWithUser, aiMsg];
+        setMessages(finalMessages);
+        saveChatHistory(finalMessages);
+        setIsTyping(false);
+
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+
+      } catch (error) {
+        console.error("Generation error:", error);
+        setIsTyping(false);
+        Alert.alert("Error", "The AI failed to generate a response.");
+      }
+
+      /*try {
         // format the conversation history for Llama
         // map message objects into the format the model expects: "User: Hello \n Assistant: Hi!"
         let formattedHistory = `${systemPrompt}\n\n`;
@@ -723,12 +814,13 @@ export default function App() {
         console.error("Generation error:", error);
         setIsTyping(false);
         Alert.alert("Error", "The AI failed to generate a response.");
-      }
+      }*/
     }
   };
 
-  // start of render
+// start of render
   return (
+    <SafeAreaProvider>
     <View
       style={[
         styles.container,
@@ -738,122 +830,7 @@ export default function App() {
     >
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} />
 
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={isSettingsVisible}
-        onRequestClose={() => setIsSettingsVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View
-            style={[
-              styles.modalContent,
-              isDarkMode ? styles.darkModal : styles.lightModal,
-            ]}
-          >
-            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>
-              Settings
-            </Text>
-
-            <View style={styles.settingRow}>
-              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>
-                Theme: {isDarkMode ? "Dark" : "Light"}
-              </Text>
-              <Switch
-                value={isDarkMode}
-                onValueChange={toggleTheme}
-                trackColor={{ false: "#767577", true: "#34C759" }}
-              />
-            </View>
-
-            <View style={styles.settingRow}>
-              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>
-                Show Animated Logo{"\n"}on Startup
-              </Text>
-              <Switch
-                value={playIntroVideo}
-                onValueChange={handleToggleVideo}
-                trackColor={{ false: "#767577", true: "#81b0ff" }}
-                thumbColor={playIntroVideo ? "#2196F3" : "#f4f3f4"}
-              />
-            </View>
-
-            <View style={styles.settingRow}>
-              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>
-                Companion AI Model
-              </Text>
-
-              {modelReady ? (
-                <Text style={{ color: "#34C759", fontWeight: "bold" }}>
-                  Installed ✓
-                </Text>
-              ) : isDownloading ? (
-                <Text style={{ color: "#007AFF" }}>{downloadProgress}%</Text>
-              ) : (
-                <TouchableOpacity
-                  style={{
-                    backgroundColor: "#007AFF",
-                    padding: 8,
-                    borderRadius: 8,
-                  }}
-                  onPress={downloadModel}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "bold" }}>
-                    Download
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {modelReady && (
-              <View style={styles.settingRow}>
-                <Text
-                  style={[styles.modalLabel, isDarkMode && styles.darkText]}
-                >
-                  Active Brain:
-                </Text>
-                <Text
-                  style={[
-                    styles.modalLabel,
-                    {
-                      color: isDarkMode ? "#aaa" : "#666",
-                      fontSize: 14,
-                      fontWeight: "normal",
-                    },
-                  ]}
-                >
-                  {MODEL_DISPLAY_NAME}
-                </Text>
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={[styles.resetButton, { backgroundColor: "#8E8D8A", marginBottom: 15 }]}
-              onPress={() => {
-                setIsSettingsVisible(false); // Close settings
-                setIsVectorPOCVisible(true); // Open POC
-              }}
-            >
-              <Text style={styles.resetText}>Open Vector DB Testing</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.resetButton}
-              onPress={confirmResetProfile}
-            >
-              <Text style={styles.resetText}>Reset User Profile</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setIsSettingsVisible(false)}
-            >
-              <Text style={styles.closeText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
+      {/* MODAL 1: AI PERSONALITY */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -861,16 +838,8 @@ export default function App() {
         onRequestClose={() => setIsPromptModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View
-            style={[
-              styles.modalContent,
-              isDarkMode ? styles.darkModal : styles.lightModal,
-            ]}
-          >
-            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>
-              AI Personality
-            </Text>
-
+          <View style={[styles.modalContent, isDarkMode ? styles.darkModal : styles.lightModal]}>
+            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>AI Personality</Text>
             <TextInput
               style={[styles.promptInput, isDarkMode && styles.darkInput]}
               value={systemPrompt}
@@ -881,23 +850,17 @@ export default function App() {
               placeholder="Enter the instructions for the AI's personality..."
               placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
             />
-
-            <TouchableOpacity
-              style={[styles.resetButton, { backgroundColor: "#34C759" }]}
-              onPress={saveSystemPrompt}
-            >
+            <TouchableOpacity style={[styles.resetButton, { backgroundColor: "#34C759" }]} onPress={saveSystemPrompt}>
               <Text style={styles.resetText}>Save Settings</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setIsPromptModalVisible(false)}
-            >
+            <TouchableOpacity style={styles.closeButton} onPress={() => setIsPromptModalVisible(false)}>
               <Text style={styles.closeText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
+
+      {/* MODAL 2: MEMORY INSPECTOR */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -906,28 +869,12 @@ export default function App() {
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, isDarkMode ? styles.darkModal : styles.lightModal, { height: '80%' }]}>
-            <Text style={[styles.modalTitle, isDarkMode && styles.darkText, { marginBottom: 15 }]}>
-              Vector DB Pipeline
+            <Text style={[styles.modalTitle, isDarkMode && styles.darkText, { marginBottom: 15 }]}>Memory Inspector</Text>
+            <Text style={{ color: isDarkMode ? '#aaa' : '#666', marginBottom: 20, textAlign: 'center', fontSize: 12 }}>
+              Debug Tool: Test the semantic search algorithm against your active chat history.
             </Text>
-
-            {/* Step 1: Insert */}
             <Text style={[styles.modalLabel, isDarkMode && styles.darkText, { alignSelf: 'flex-start', marginBottom: 5 }]}>
-              1. Store Memory
-            </Text>
-            <TextInput
-              style={[styles.input, isDarkMode && styles.darkInput, { width: '100%', marginBottom: 10 }]}
-              placeholder="e.g., My favorite editor is VS Code"
-              placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
-              value={pocMemoryInput}
-              onChangeText={setPocMemoryInput}
-            />
-            <TouchableOpacity style={[styles.resetButton, { backgroundColor: "#007AFF" }]} onPress={handleSaveMemoryPOC}>
-              <Text style={styles.resetText}>Save to Vector DB</Text>
-            </TouchableOpacity>
-
-            {/* Step 2: Retrieve */}
-            <Text style={[styles.modalLabel, isDarkMode && styles.darkText, { alignSelf: 'flex-start', marginBottom: 5, marginTop: 10 }]}>
-              2. Query Memory
+              Test a Query:
             </Text>
             <TextInput
               style={[styles.input, isDarkMode && styles.darkInput, { width: '100%', marginBottom: 10 }]}
@@ -937,26 +884,25 @@ export default function App() {
               onChangeText={setPocQueryInput}
             />
             <TouchableOpacity style={[styles.resetButton, { backgroundColor: "#34C759" }]} onPress={handleRetrieveMemoryPOC}>
-              <Text style={styles.resetText}>Test Retrieval Search</Text>
+              <Text style={styles.resetText}>Run Similarity Search</Text>
             </TouchableOpacity>
-
-            {/* Step 3: Results */}
             <View style={{ flex: 1, width: '100%', marginTop: 10, backgroundColor: isDarkMode ? '#3a3a3c' : '#f0f0f0', borderRadius: 10, padding: 10 }}>
-              <Text style={[styles.modalLabel, isDarkMode && styles.darkText, { marginBottom: 5 }]}>Results & Console Logs:</Text>
+              <Text style={[styles.modalLabel, isDarkMode && styles.darkText, { marginBottom: 5 }]}>Vector DB Matches:</Text>
               <ScrollView>
                 {pocRetrievedResults.length === 0 ? (
-                  <Text style={{ color: isDarkMode ? "#aaa" : "#666", fontStyle: 'italic' }}>Run a query to see similarity matches. Check VS Code terminal for full pipeline logs.</Text>
+                  <Text style={{ color: isDarkMode ? "#aaa" : "#666", fontStyle: 'italic' }}>No matches found or query not run yet.</Text>
                 ) : (
                   pocRetrievedResults.map((item) => (
-                    <View key={item.id} style={{ backgroundColor: isDarkMode ? '#2c2c2e' : '#fff', padding: 8, borderRadius: 5, marginBottom: 8 }}>
-                      <Text style={{ color: isDarkMode ? '#fff' : '#000', fontStyle: 'italic' }}>"{item.text}"</Text>
-                      <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>Score: {item.score.toFixed(3)}</Text>
+                    <View key={item.id} style={{ backgroundColor: isDarkMode ? '#2c2c2e' : '#fff', padding: 12, borderRadius: 8, marginBottom: 8 }}>
+                      <Text style={{ color: isDarkMode ? '#fff' : '#000', fontStyle: 'italic', marginBottom: 4 }}>"{item.text}"</Text>
+                      <Text style={{ color: item.score > 0.82 ? '#34C759' : '#ff3b30', fontSize: 12, fontWeight: 'bold' }}>
+                        Match Score: {item.score.toFixed(3)}
+                      </Text>
                     </View>
                   ))
                 )}
               </ScrollView>
             </View>
-
             <TouchableOpacity style={styles.closeButton} onPress={() => setIsVectorPOCVisible(false)}>
               <Text style={styles.closeText}>Close Debugger</Text>
             </TouchableOpacity>
@@ -964,131 +910,132 @@ export default function App() {
         </View>
       </Modal>
 
-      <View style={[styles.header, isDarkMode && styles.darkHeader]}>
-        <View style={styles.headerLeft}>
-          <Text style={[styles.title, isDarkMode && styles.darkText]}>
-            Local AI 
-          </Text>
-          <Text
-            style={[
-              styles.userLabel,
-              isDarkMode ? styles.darkText : styles.lightText,
-            ]}
-          >
-            User: {userName}
-          </Text>
-        </View>
-        <View style={styles.statusContainer}>
-          <Text style={[styles.statusIcon, { color: llamaContext ? '#34C759' : '#888' }]}>
-            ✓
-          </Text>
-          <Text style={[styles.statusText, { color: llamaContext ? '#34C759' : '#888' }]}>
-            Model{"\n"}Loaded
-          </Text>
-        </View>
-        <View style={styles.headerControls}>
-          <TouchableOpacity
-            onPress={() => setIsPromptModalVisible(true)}
-            style={styles.gearButton}
-          >
-            <Text style={{ fontSize: 24 }}>{"  📝"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setIsSettingsVisible(true)}
-            style={styles.gearButton}
-          >
-            <Text style={{ fontSize: 24 }}>{"⚙️"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
-            <Text style={styles.clearText}>Clear</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      {/* --- SCREEN NAVIGATION LOGIC --- */}
+      {activeScreen === "chat" ? (
+        <>
+          {/* PAGE 1: CHAT SCREEN */}
+          <View style={[styles.header, isDarkMode && styles.darkHeader]}>
+            <View style={styles.headerLeft}>
+              <Text style={[styles.title, isDarkMode && styles.darkText]}>Local AI</Text>
+              <Text style={[styles.userLabel, isDarkMode ? styles.darkText : styles.lightText]}>User: {userName}</Text>
+            </View>
+            <View style={styles.statusContainer}>
+              <Text style={[styles.statusIcon, { color: llamaContext ? '#34C759' : '#888' }]}>✓</Text>
+              <Text style={[styles.statusText, { color: llamaContext ? '#34C759' : '#888' }]}>Model{"\n"}Loaded</Text>
+            </View>
+            <View style={styles.headerControls}>
+              <TouchableOpacity onPress={() => setIsPromptModalVisible(true)} style={styles.gearButton}>
+                <Text style={{ fontSize: 24 }}>{"  📝"}</Text>
+              </TouchableOpacity>
+              
+              {/* PAGE SWAP BUTTON */}
+              <TouchableOpacity onPress={() => setActiveScreen("settings")} style={styles.gearButton}>
+                <Text style={{ fontSize: 24 }}>{"⚙️"}</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
+                <Text style={styles.clearText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item) => item.id}
-          style={styles.chatList}
-          contentContainerStyle={styles.chatContainer}
-          onContentSizeChange={() =>
-            flatListRef.current?.scrollToEnd({ animated: true })
-          }
-          onLayout={() =>
-            flatListRef.current?.scrollToEnd({ animated: false })
-          }
-          renderItem={({ item }) => {
-            const shouldAnimate = item.id === animatingMessageId;
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <FlatList
+              ref={flatListRef}
+              data={messages}
+              keyExtractor={(item) => item.id}
+              style={styles.chatList}
+              contentContainerStyle={styles.chatContainer}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+              onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              renderItem={({ item }) => {
+                const shouldAnimate = item.id === animatingMessageId;
+                return (
+                  <View style={[styles.messageWrapper, item.sender === "user" ? styles.userWrapper : isDarkMode ? styles.darkAiWrapper : styles.aiWrapper]}>
+                    {shouldAnimate ? (
+                      <TypeWriterText text={item.text} style={[styles.messageText, isDarkMode ? styles.darkText : styles.aiText]} scrollViewRef={flatListRef} />
+                    ) : (
+                      <Text style={[styles.messageText, item.sender === "user" ? styles.userText : isDarkMode ? styles.darkText : styles.aiText]}>{item.text}</Text>
+                    )}
+                  </View>
+                );
+              }}
+            />
+          </TouchableWithoutFeedback>
 
-            return (
-              <View
-                style={[
-                  styles.messageWrapper,
-                  item.sender === "user"
-                    ? styles.userWrapper
-                    : isDarkMode
-                      ? styles.darkAiWrapper
-                      : styles.aiWrapper,
-                ]}
-              >
-                {shouldAnimate ? (
-                  <TypeWriterText
-                    text={item.text}
-                    style={[
-                      styles.messageText,
-                      isDarkMode ? styles.darkText : styles.aiText,
-                    ]}
-                    scrollViewRef={flatListRef}
-                  />
-                ) : (
-                  <Text
-                    style={[
-                      styles.messageText,
-                      item.sender === "user"
-                        ? styles.userText
-                        : isDarkMode
-                          ? styles.darkText
-                          : styles.aiText,
-                    ]}
-                  >
-                    {item.text}
-                  </Text>
-                )}
+          {isTyping && <TypingIndicator isDarkMode={isDarkMode} />}
+
+          <View style={[styles.inputRow, isDarkMode && styles.darkHeader, { paddingBottom: keyboardHeight > 0 ? 55 : 50 }]}>
+            <TextInput
+              style={[styles.input, isDarkMode && styles.darkInput]}
+              value={inputText}
+              onChangeText={setInputText}
+              placeholder="Type a message..."
+              placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
+              multiline={true}
+              onFocus={() => setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 200)}
+            />
+            <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+              <Text style={styles.sendText}>Send</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      ) : (
+        /* PAGE 2: SETTINGS SCREEN */
+        <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <View style={[styles.modalContent, isDarkMode ? styles.darkModal : styles.lightModal, { width: '90%', elevation: 5 }]}>
+            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>Settings</Text>
+
+            <View style={styles.settingRow}>
+              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>Theme: {isDarkMode ? "Dark" : "Light"}</Text>
+              <Switch value={isDarkMode} onValueChange={toggleTheme} trackColor={{ false: "#767577", true: "#34C759" }} />
+            </View>
+
+            <View style={styles.settingRow}>
+              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>Show Animated Logo{"\n"}on Startup</Text>
+              <Switch value={playIntroVideo} onValueChange={handleToggleVideo} trackColor={{ false: "#767577", true: "#81b0ff" }} thumbColor={playIntroVideo ? "#2196F3" : "#f4f3f4"} />
+            </View>
+
+            <View style={styles.settingRow}>
+              <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>Companion AI Model</Text>
+              {modelReady ? (
+                <Text style={{ color: "#34C759", fontWeight: "bold" }}>Installed ✓</Text>
+              ) : isDownloading ? (
+                <Text style={{ color: "#007AFF" }}>{downloadProgress}%</Text>
+              ) : (
+                <TouchableOpacity style={{ backgroundColor: "#007AFF", padding: 8, borderRadius: 8 }} onPress={downloadModel}>
+                  <Text style={{ color: "#fff", fontWeight: "bold" }}>Download</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {modelReady && (
+              <View style={styles.settingRow}>
+                <Text style={[styles.modalLabel, isDarkMode && styles.darkText]}>Active Brain:</Text>
+                <Text style={[styles.modalLabel, { color: isDarkMode ? "#aaa" : "#666", fontSize: 14, fontWeight: "normal" }]}>{MODEL_DISPLAY_NAME}</Text>
               </View>
-            );
-          }}
-        />
-      </TouchableWithoutFeedback>
+            )}
 
-      {isTyping && <TypingIndicator isDarkMode={isDarkMode} />}
+            <TouchableOpacity
+              style={[styles.resetButton, { backgroundColor: "#8E8D8A", marginBottom: 15 }]}
+              onPress={() => setIsVectorPOCVisible(true)}
+            >
+              <Text style={styles.resetText}>Open Vector DB Testing</Text>
+            </TouchableOpacity>
 
-      <View
-        style={[
-          styles.inputRow,
-          isDarkMode && styles.darkHeader,
-          { paddingBottom: keyboardHeight > 0 ? 55 : 50 },
-        ]}
-      >
-        <TextInput
-          style={[styles.input, isDarkMode && styles.darkInput]}
-          value={inputText}
-          onChangeText={setInputText}
-          placeholder="Type a message..."
-          placeholderTextColor={isDarkMode ? "#aaa" : "#888"}
-          multiline={true}
-          onFocus={() =>
-            setTimeout(
-              () => flatListRef.current?.scrollToEnd({ animated: true }),
-              200,
-            )
-          }
-        />
-        <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-          <Text style={styles.sendText}>Send</Text>
-        </TouchableOpacity>
-      </View>
+            <TouchableOpacity style={styles.resetButton} onPress={confirmResetProfile}>
+              <Text style={styles.resetText}>Reset User Profile</Text>
+            </TouchableOpacity>
+
+            {/* RETURN TO CHAT BUTTON */}
+            <TouchableOpacity style={styles.closeButton} onPress={() => setActiveScreen("chat")}>
+              <Text style={styles.closeText}>Return to Chat</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      )}
     </View>
+    </SafeAreaProvider>
   );
 }
 
