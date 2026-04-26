@@ -888,7 +888,7 @@ export default function App() {
 
         // only map the shortTermHistory to avoid crashing the 2048 token limit
         shortTermHistory.forEach((msg) => {
-          if (msg.id !== "welcome") {
+          if (msg.id !== "welcome" && !msg.isHidden) { // check for hidden state
             const role = msg.sender === "user" ? userName : "Assistant";
             formattedHistory += `${role}: ${msg.text}\n`;
           }
