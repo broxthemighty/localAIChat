@@ -142,6 +142,62 @@ const generateRealEmbedding = async (text, context) => {
   }
 };
 
+// --- advanced RAG utility: stop-word filtering ---
+const removeStopWords = (text) => {
+  const stopWords = ["a", "an", "the", "and", "but", "if", "or", "because", "as", "what", "is", "my", "tell", "me", "can", "you", "do", "how", "why", "hey", "ai"];
+  
+  // split text into words, remove punctuation, filter out stop words, and rejoin
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/gi, '') // remove punctuation
+    .split(' ')
+    .filter(word => !stopWords.includes(word) && word.length > 0)
+    .join(' ');
+};
+
+// --- advanced RAG: memory consolidation ---
+const consolidateMemories = async (messagesToProcess, context) => {
+  if (messagesToProcess.length === 0 || !context) return null;
+
+  console.log(`[Consolidation] Processing ${messagesToProcess.length} old messages...`);
+
+  // join all old raw text
+  const rawTextToSummarize = messagesToProcess.map(m => m.text).join(" | ");
+  
+  // the summarization prompt
+  const summaryPrompt = `System: You are an AI memory archivist. Summarize the following user statements into a concise list of core facts, preferences, and details about the user. Ignore pleasantries and AI responses.\n\nUser Statements: ${rawTextToSummarize}\n\nSummary:`;
+
+  try {
+    const response = await context.completion({
+      prompt: summaryPrompt,
+      n_predict: 200,
+      temperature: 0.3, // low temp for factual recall
+      stop: ["\nSystem:"],
+    });
+
+    const summaryText = response.text.trim();
+    console.log("[Consolidation] Generated Summary:", summaryText);
+
+    // generate the vector embedding for the NEW summary
+    const summaryVector = await generateRealEmbedding(summaryText, context);
+
+    // create the hidden memory node
+    const consolidatedMemory = {
+      id: `summary_${Date.now()}`,
+      timestamp: Date.now().toString(),
+      text: summaryText,
+      sender: "system", // differentiates it from standard user messages
+      vector: summaryVector,
+      isHidden: true,   // tells the UI not to render this bubble
+    };
+
+    return consolidatedMemory;
+  } catch (error) {
+    console.error("[Consolidation Error]:", error);
+    return null;
+  }
+};
+
 // -------------------------------
 
 // MMKV storage instance
