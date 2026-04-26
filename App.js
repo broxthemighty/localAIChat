@@ -285,19 +285,21 @@ const TypingIndicator = ({ isDarkMode }) => {
 // typewriter text animation
 const TypeWriterText = ({ text, style, onTypingComplete, scrollViewRef }) => {
   const [displayedText, setDisplayedText] = useState("");
-  const index = useRef(0);
 
   useEffect(() => {
-    index.current = 0;
+    // use a local variable instead of a useRef to prevent cross-render pollution
+    let currentIndex = 0;
     setDisplayedText("");
 
     const timer = setInterval(() => {
-      if (index.current < text.length) {
-        setDisplayedText((prev) => prev + text.charAt(index.current));
-        index.current++;
+      if (currentIndex < text.length) {
+        currentIndex++;
+        
+        // slice the exact string from the source
+        setDisplayedText(text.substring(0, currentIndex));
 
         // gently scroll to bottom as text expands
-        if (index.current % 15 === 0 && scrollViewRef?.current) {
+        if (currentIndex % 15 === 0 && scrollViewRef?.current) {
           scrollViewRef.current.scrollToEnd({ animated: true });
         }
       } else {
