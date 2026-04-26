@@ -18,6 +18,7 @@ import {
   UIManager,
   Animated,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
 
 // enable LayoutAnimation for Android
@@ -39,8 +40,8 @@ import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 /*
  * UAT MS688 Mobile Development
  *
- * Week 6
- * Assignment 6.2
+ * Week 7
+ * Assignment 7.1
  * * Local AI Chat
  *
  * By Matt Lindborg
@@ -56,16 +57,23 @@ import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
  *            quality of life updates. 
  * * Week 6 - added a proof of concept (POC) for the integration of the vector database,
  *            putting it under Vector DB Pipeline as a modal to get to it through settings.
+ * * Week 7 - modified the POC vector data testing addition from last week, using it to test
+ *            live data saved in the app. 
+ *            Added additional improvements to the data handling, including memory consolidation,
+ *            unnecessary word removal, timestamp management, and data summary creation.
+ *            Trying to emulate a similar data handling present in the major cloud based 
+ *            services, but on the local device.
  */
 
 // roadmap for future vector database integration:
 // a. add slm support, so the ai chat actually uses an ai. ***DONE***
-// b. add model searching similar to lm studio, using hugging face api.
+// b. add model searching similar to lm studio, using hugging face api. FUTURE
 // -----
-// 1. implement text embedding: convert user input into high-dimensional vectors (e.g., via onnx runtime).
+// 1. implement text embedding: convert user input into high-dimensional vectors (e.g., via onnx runtime). ***DONE***
 // 2. setup local vector store: integrate a mobile-compatible vector library (like sqlite-vss) to replace json-based history. (need a schema that works)
-// 3. semantic search: enable the ai to "remember" context by searching the database for visually/thematically similar past messages.
-// 4. context windowing: feed retrieved vector results back into the ai prompt for "long-term memory" capabilities.
+//    ***DONE*** using MMKV to store data.
+// 3. semantic search: enable the ai to "remember" context by searching the database for visually/thematically similar past messages. ***DONE***
+// 4. context windowing: feed retrieved vector results back into the ai prompt for "long-term memory" capabilities. ***DONE***
 
 // This function calculates Cosine Similarity. If retrieval fails or returns weird matches,
 // I have placed console.logs inside handleRetrieveMemoryPOC to output the exact 
@@ -81,6 +89,16 @@ const generateMockEmbedding = (text) => {
 };
 
 const cosineSimilarity = (vecA, vecB) => {
+  // safety checks to prevent the 0.00 bug
+  if (!Array.isArray(vecA) || !Array.isArray(vecB)) {
+    console.error("[Math Error] Vectors are not arrays! Check your embedding extraction.");
+    return 0;
+  }
+  if (vecA.length !== vecB.length) {
+    console.error(`[Math Error] Dimension mismatch! VecA: ${vecA.length}, VecB: ${vecB.length}`);
+    return 0;
+  }
+
   let dotProduct = 0, normA = 0, normB = 0;
   for (let i = 0; i < vecA.length; i++) {
     dotProduct += vecA[i] * vecB[i];
@@ -91,16 +109,91 @@ const cosineSimilarity = (vecA, vecB) => {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 };
 
+// --- advanced RAG utility time decay penalty ---
+// penalizes older memories so newer facts win in a tie-breaker.
+const applyTimeDecay = (baseScore, memoryTimestamp) => {
+  const now = Date.now();
+  const memoryAgeMs = now - parseInt(memoryTimestamp);
+  
+  // convert age to days (or hours/minutes depending on testing)
+  // memory loses 0.01 score for every minute old it is, capping at -0.15
+  const ageInMinutes = memoryAgeMs / (1000 * 60);
+  const penalty = Math.min(ageInMinutes * 0.01, 0.15); 
+  
+  return baseScore - penalty;
+};
+
 const generateRealEmbedding = async (text, context) => {
   if (!context) return null;
   try {
-    console.log("[Embedding] Requesting real vector from SLM for text length:", text.length);
-    // llama.rn returns a high-dimensional Float32Array for the input string
+    console.log("[Embedding] Requesting real vector for:", text.substring(0, 20) + "...");
+    
+    // call the engine
     const result = await context.embedding(text);
-    console.log("[Embedding] Real vector generated successfully.");
-    return result; 
+    
+    // extract the actual array from the result object
+    const vectorArray = result.embedding ? result.embedding : result;
+    
+    console.log("[Embedding] Real vector generated successfully. Array Size:", vectorArray.length);
+    return vectorArray; 
   } catch (error) {
     console.error("[Embedding Error]:", error);
+    return null;
+  }
+};
+
+// --- advanced RAG utility: stop-word filtering ---
+const removeStopWords = (text) => {
+  const stopWords = ["a", "an", "the", "and", "but", "if", "or", "because", "as", "what", "is", "my", "tell", "me", "can", "you", "do", "how", "why", "hey", "ai"];
+  
+  // split text into words, remove punctuation, filter out stop words, and rejoin
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/gi, '') // remove punctuation
+    .split(' ')
+    .filter(word => !stopWords.includes(word) && word.length > 0)
+    .join(' ');
+};
+
+// --- advanced RAG: memory consolidation ---
+const consolidateMemories = async (messagesToProcess, context) => {
+  if (messagesToProcess.length === 0 || !context) return null;
+
+  console.log(`[Consolidation] Processing ${messagesToProcess.length} old messages...`);
+
+  // join all old raw text
+  const rawTextToSummarize = messagesToProcess.map(m => m.text).join(" | ");
+  
+  // the summarization prompt
+  const summaryPrompt = `System: You are an AI memory archivist. Summarize the following user statements into a concise list of core facts, preferences, and details about the user. Ignore pleasantries and AI responses.\n\nUser Statements: ${rawTextToSummarize}\n\nSummary:`;
+
+  try {
+    const response = await context.completion({
+      prompt: summaryPrompt,
+      n_predict: 200,
+      temperature: 0.3, // Low temp for factual recall
+      stop: ["\nSystem:"],
+    });
+
+    const summaryText = response.text.trim();
+    console.log("[Consolidation] Generated Summary:", summaryText);
+
+    // generate the vector embedding for the NEW summary
+    const summaryVector = await generateRealEmbedding(summaryText, context);
+
+    // create the hidden memory node
+    const consolidatedMemory = {
+      id: `summary_${Date.now()}`,
+      timestamp: Date.now().toString(),
+      text: summaryText,
+      sender: "system", // differentiates it from standard user messages
+      vector: summaryVector,
+      isHidden: true,   // tells the UI not to render this bubble
+    };
+
+    return consolidatedMemory;
+  } catch (error) {
+    console.error("[Consolidation Error]:", error);
     return null;
   }
 };
@@ -244,6 +337,49 @@ export default function App() {
   const [pocQueryInput, setPocQueryInput] = useState("");
   const [pocRetrievedResults, setPocRetrievedResults] = useState([]);
 
+  const [isConsolidating, setIsConsolidating] = useState(false);
+
+  // --- date boundary checker ---
+  const checkAndRunConsolidation = async (currentMessages, context) => {
+    const now = new Date();
+    // get the exact millisecond timestamp for 12:00 AM today
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    // find raw messages older than today
+    const oldRawMessages = currentMessages.filter(msg => 
+      msg.sender === "user" && 
+      msg.vector && 
+      !msg.isHidden &&
+      parseInt(msg.timestamp) < startOfToday
+    );
+
+    if (oldRawMessages.length > 0) {
+      console.log(`[Memory] Date boundary crossed! Summarizing ${oldRawMessages.length} messages.`);
+      setIsConsolidating(true); 
+
+      const newSummaryNode = await consolidateMemories(oldRawMessages, context);
+
+      if (newSummaryNode) {
+        // strip vectors from old messages to save math-time and storage
+        const updatedHistory = currentMessages.map(msg => {
+          if (oldRawMessages.some(oldMsg => oldMsg.id === msg.id)) {
+            const { vector, ...restOfMsg } = msg; 
+            return restOfMsg;
+          }
+          return msg;
+        });
+
+        // add the new hidden summary node
+        updatedHistory.push(newSummaryNode);
+        
+        setMessages(updatedHistory);
+        saveChatHistory(updatedHistory);
+        console.log("[Memory] Consolidation complete. Old vectors stripped.");
+      }
+      setIsConsolidating(false);
+    }
+  };
+
   // slm variables
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -331,6 +467,11 @@ export default function App() {
           });
           setLlamaContext(context);
           console.log("Llama context initialized and ready!");
+
+          // check for old memories to summarize immediately upon loading the model
+          const savedStr = storage.getString(CHAT_STORAGE_KEY);
+          const initialMsgs = savedStr ? JSON.parse(savedStr) : [];
+          checkAndRunConsolidation(initialMsgs, context);
         } catch (error) {
           console.error("Failed to init Llama:", error);
           Alert.alert("Engine Error", "Failed to load the AI engine.");
@@ -475,21 +616,46 @@ export default function App() {
     }
   };
 
-  // clear chat variable
-  const clearChat = () => {
+  // --- ui action: clear screen only ---
+  const clearScreenOnly = () => {
+    setMessages([
+      {
+        id: "welcome",
+        text: `Hello, ${userName}! Screen cleared. My long-term memory is still intact.`,
+        sender: "ai",
+      },
+    ]);
+    // intentionally do NOT call saveChatHistory here so MMKV stays intact
+  };
+
+  // --- database action: warning popup ---
+  const confirmEraseMemory = () => {
+    Alert.alert(
+      "Erase All Memory?",
+      "This will permanently delete all chat history and vector memories. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Erase Everything", style: "destructive", onPress: eraseAllMemory },
+      ]
+    );
+  };
+
+  // --- database action: permanent wipe ---
+  const eraseAllMemory = () => {
     try {
       storage.remove(CHAT_STORAGE_KEY);
       const resetMessage = [
         {
           id: Date.now().toString(),
-          text: "Chat history cleared. How can I help you?",
+          text: "Memory wiped. All chat history and vectors have been permanently erased.",
           sender: "ai",
         },
       ];
       setMessages(resetMessage);
       saveChatHistory(resetMessage);
+      setActiveScreen("chat"); // return to chat screen after wiping
     } catch (e) {
-      console.error("Failed to clear chat:", e);
+      console.error("Failed to clear memory:", e);
     }
   };
 
@@ -566,10 +732,12 @@ export default function App() {
 
       // scan the REAL messages array
       messages.forEach(msg => {
-        // Only check user messages that have successfully stored vectors
-        if (msg.sender === "user" && msg.vector) {
-          const score = cosineSimilarity(queryEmbedding, msg.vector);
-          scoredMemories.push({ id: msg.id, text: msg.text, score: score });
+        // only check user messages that have successfully stored vectors
+        // include system summaries in the search
+        if ((msg.sender === "user" || msg.sender === "system") && msg.vector) {
+          const rawScore = cosineSimilarity(queryEmbedding, msg.vector);
+          const finalScore = msg.timestamp ? applyTimeDecay(rawScore, msg.timestamp) : rawScore;
+          scoredMemories.push({ id: msg.id, text: msg.text, score: finalScore });
         }
       });
 
@@ -604,6 +772,7 @@ export default function App() {
 
     const userMsg = {
       id: Date.now().toString(),
+      timestamp: Date.now().toString(),
       text: currentInput,
       sender: "user",
       vector: userVector,
@@ -673,23 +842,6 @@ export default function App() {
         100,
       );
     } else {
-      // mock ai
-      /*setTimeout(() => {
-        const aiMsg = {
-          id: (Date.now() + 1).toString(),
-          text: `This is a saved simulated response, ${userName}! History will persist.`,
-          sender: "ai",
-        };
-        const updatedWithMock = [...updatedWithUser, aiMsg];
-        setMessages(updatedWithMock);
-        saveChatHistory(updatedWithMock);
-        setIsTyping(false);
-        // explicit scroll call
-        setTimeout(
-          () => flatListRef.current?.scrollToEnd({ animated: true }),
-          100,
-        );
-      }, 1500);*/
 
       // real slm
       // check if the AI is actually loaded into RAM
@@ -703,40 +855,46 @@ export default function App() {
       }
 
       try {
-        // --- pipeline semantic search ---
-        console.log("\n--- INITIATING MEMORY RETRIEVAL ---");
+        // --- advanced pipeline semantic search ---
+        console.log("\n--- INITIATING ADVANCED MEMORY RETRIEVAL ---");
         const scoredMemories = [];
 
-        // compare the new user vector against all past user messages
-        if (userVector) {
-          updatedWithUser.forEach(msg => {
-            // only compare against past user messages that have a vector (ignore the current message)
-            if (msg.sender === "user" && msg.id !== userMsg.id && msg.vector) {
-              const score = cosineSimilarity(userVector, msg.vector);
-              scoredMemories.push({ text: msg.text, score: score });
-            }
-          });
+        // define the boundary: last 8 messages are Short-Term. everything before is Long-Term
+        const SHORT_TERM_LIMIT = 8;
+        const longTermMemoryPool = updatedWithUser.slice(0, -SHORT_TERM_LIMIT);
+        const shortTermHistory = updatedWithUser.slice(-SHORT_TERM_LIMIT);
 
-          // sort by highest similarity
-          scoredMemories.sort((a, b) => b.score - a.score);
+        if (userVector) {
+          const cleanQuery = removeStopWords(currentInput);
+          const searchVector = await generateRealEmbedding(cleanQuery, llamaContext);
+
+          if (searchVector) {
+            // only search the long-term pool! no redundant short-term memories
+            longTermMemoryPool.forEach(msg => {
+              // include system summaries
+              if ((msg.sender === "user" || msg.sender === "system") && msg.id !== userMsg.id && msg.vector) {
+                const rawScore = cosineSimilarity(searchVector, msg.vector);
+                const finalScore = msg.timestamp ? applyTimeDecay(rawScore, msg.timestamp) : rawScore;
+
+                scoredMemories.push({ text: msg.text, rawScore, finalScore });
+              }
+            });
+            scoredMemories.sort((a, b) => b.finalScore - a.finalScore);
+          }
         }
 
-        // filter strict matches (threshold > 0.82) and grab the top 2
-        const topMatches = scoredMemories.filter(m => m.score > 0.82).slice(0, 2);
-        console.log("[Search] Top historical matches:", topMatches.map(m => ({ score: m.score.toFixed(3), text: m.text })));
+        const topMatches = scoredMemories.filter(m => m.finalScore > 0.80).slice(0, 2);
 
         // --- pipeline prompt injection ---
         let formattedHistory = `${systemPrompt}\n\n`;
 
-        // if relevant memories found, secretly inject them into the system context
         if (topMatches.length > 0) {
           const memoryContext = topMatches.map(m => m.text).join(" | ");
           formattedHistory += `[SYSTEM CONTEXT: The user has previously mentioned the following relevant information: ${memoryContext}]\n\n`;
-          console.log("[Prompt Injection] Added background memory:", memoryContext);
         }
 
-        // map the recent visible conversation history
-        updatedWithUser.forEach((msg) => {
+        // only map the shortTermHistory to avoid crashing the 2048 token limit
+        shortTermHistory.forEach((msg) => {
           if (msg.id !== "welcome") {
             const role = msg.sender === "user" ? userName : "Assistant";
             formattedHistory += `${role}: ${msg.text}\n`;
@@ -767,54 +925,14 @@ export default function App() {
 
         setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
+        // check if the date rolled over during the conversation
+        checkAndRunConsolidation(finalMessages, llamaContext);
+
       } catch (error) {
         console.error("Generation error:", error);
         setIsTyping(false);
         Alert.alert("Error", "The AI failed to generate a response.");
       }
-
-      /*try {
-        // format the conversation history for Llama
-        // map message objects into the format the model expects: "User: Hello \n Assistant: Hi!"
-        let formattedHistory = `${systemPrompt}\n\n`;
-        updatedWithUser.forEach((msg) => {
-          if (msg.id !== "welcome") {
-            // skip the hardcoded welcome message
-            const role = msg.sender === "user" ? userName : "Assistant";
-            formattedHistory += `${role}: ${msg.text}\n`;
-          }
-        });
-        formattedHistory += "Assistant:"; // Prompt the AI to start speaking
-
-        // ask the AI to generate a response
-        const response = await llamaContext.completion({
-          prompt: formattedHistory,
-          n_predict: 150, // max words to generate
-          temperature: 0.7, // adds slight creativity/personality
-          stop: ["\nUser:", `\n${userName}:`, "\nAssistant:"], // tells the AI to stop generating when it thinks it's user's turn to speak
-        });
-
-        // output the result to the chat
-        const aiMsg = {
-          id: (Date.now() + 1).toString(),
-          text: response.text.trim(),
-          sender: "ai",
-        };
-        setAnimatingMessageId(aiMsg.id);
-        const finalMessages = [...updatedWithUser, aiMsg];
-        setMessages(finalMessages);
-        saveChatHistory(finalMessages);
-        setIsTyping(false);
-
-        setTimeout(
-          () => flatListRef.current?.scrollToEnd({ animated: true }),
-          100,
-        );
-      } catch (error) {
-        console.error("Generation error:", error);
-        setIsTyping(false);
-        Alert.alert("Error", "The AI failed to generate a response.");
-      }*/
     }
   };
 
@@ -830,7 +948,6 @@ export default function App() {
     >
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} />
 
-      {/* MODAL 1: AI PERSONALITY */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -860,7 +977,6 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* MODAL 2: MEMORY INSPECTOR */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -910,10 +1026,22 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* --- SCREEN NAVIGATION LOGIC --- */}
+      <Modal visible={isConsolidating} transparent={true} animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: isDarkMode ? '#2c2c2e' : '#fff', padding: 25, borderRadius: 15, alignItems: 'center', elevation: 10 }}>
+            <ActivityIndicator size="large" color="#34C759" />
+            <Text style={{ color: isDarkMode ? '#fff' : '#000', marginTop: 15, fontSize: 16, fontWeight: 'bold' }}>
+              Optimizing Memories...
+            </Text>
+            <Text style={{ color: isDarkMode ? '#aaa' : '#666', marginTop: 5, fontSize: 12, textAlign: 'center' }}>
+              Organizing past conversations into long-term storage.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+
       {activeScreen === "chat" ? (
         <>
-          {/* PAGE 1: CHAT SCREEN */}
           <View style={[styles.header, isDarkMode && styles.darkHeader]}>
             <View style={styles.headerLeft}>
               <Text style={[styles.title, isDarkMode && styles.darkText]}>Local AI</Text>
@@ -928,13 +1056,12 @@ export default function App() {
                 <Text style={{ fontSize: 24 }}>{"  📝"}</Text>
               </TouchableOpacity>
               
-              {/* PAGE SWAP BUTTON */}
               <TouchableOpacity onPress={() => setActiveScreen("settings")} style={styles.gearButton}>
                 <Text style={{ fontSize: 24 }}>{"⚙️"}</Text>
               </TouchableOpacity>
               
-              <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
-                <Text style={styles.clearText}>Clear</Text>
+              <TouchableOpacity style={styles.clearButton} onPress={clearScreenOnly}>
+                <Text style={styles.clearText}>Clear Text</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -949,6 +1076,7 @@ export default function App() {
               onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
               onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
               renderItem={({ item }) => {
+                if (item.isHidden) return null;
                 const shouldAnimate = item.id === animatingMessageId;
                 return (
                   <View style={[styles.messageWrapper, item.sender === "user" ? styles.userWrapper : isDarkMode ? styles.darkAiWrapper : styles.aiWrapper]}>
@@ -981,7 +1109,6 @@ export default function App() {
           </View>
         </>
       ) : (
-        /* PAGE 2: SETTINGS SCREEN */
         <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
           <View style={[styles.modalContent, isDarkMode ? styles.darkModal : styles.lightModal, { width: '90%', elevation: 5 }]}>
             <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>Settings</Text>
@@ -1027,7 +1154,10 @@ export default function App() {
               <Text style={styles.resetText}>Reset User Profile</Text>
             </TouchableOpacity>
 
-            {/* RETURN TO CHAT BUTTON */}
+            <TouchableOpacity style={[styles.resetButton, { backgroundColor: "#8b0000", marginTop: 10 }]} onPress={confirmEraseMemory}>
+              <Text style={styles.resetText}>Wipe Long-Term Memory</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.closeButton} onPress={() => setActiveScreen("chat")}>
               <Text style={styles.closeText}>Return to Chat</Text>
             </TouchableOpacity>
